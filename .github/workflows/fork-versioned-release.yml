@@ -6,8 +6,11 @@ name: Fork versioned release
 # prebuilt CLI bundles attached. The Homebrew tap tracks these stable
 # releases only; the rolling `desktop-YYYY-MM-DD` prereleases stay off the tap.
 #
-# Dispatch manually after reviewing a synced master. A dry run builds and
-# validates everything without creating a tag, a release, or touching the tap.
+# Dispatch manually after reviewing a synced master, or let the daily schedule
+# cut one automatically: the run is a no-op unless the manifests carry a
+# version with no release tag yet. A dry run builds and validates everything
+# without creating a tag, a release, or touching the tap. To rebuild an
+# existing release, delete its tag and release first, then dispatch again.
 
 on:
   workflow_dispatch:
@@ -21,6 +24,10 @@ on:
         required: false
         type: boolean
         default: false
+  schedule:
+    # After the 05:00 upstream sync; exits early when the current version is
+    # already released.
+    - cron: '0 6 * * *'
 
 permissions:
   contents: write
@@ -45,6 +52,7 @@ jobs:
       tag: ${{ steps.resolve.outputs.tag }}
       head: ${{ steps.resolve.outputs.head }}
       commit: ${{ steps.resolve.outputs.commit }}
+      exists: ${{ steps.check.outputs.exists }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -73,19 +81,22 @@ jobs:
           echo "head=$head" >> "$GITHUB_OUTPUT"
           echo "commit=$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
           echo "Releasing $tag from $head"
-      - name: Refuse to reuse an existing tag
-        if: ${{ !inputs.dry_run }}
+      - name: Check for an existing release tag
+        id: check
         run: |
           set -euo pipefail
           if git ls-remote --exit-code --tags origin '${{ steps.resolve.outputs.tag }}' >/dev/null 2>&1; then
-            echo "::error::Tag ${{ steps.resolve.outputs.tag }} already exists. Release a newer upstream version instead."
-            exit 1
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Tag ${{ steps.resolve.outputs.tag }} already exists; this run builds nothing."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "Tag ${{ steps.resolve.outputs.tag }} is free; proceeding."
           fi
-          echo "Tag ${{ steps.resolve.outputs.tag }} is free."
 
   package:
     name: Package ${{ matrix.target }}
     needs: prepare
+    if: ${{ inputs.dry_run || needs.prepare.outputs.exists != 'true' }}
     strategy:
       fail-fast: false
       matrix:
@@ -177,6 +188,7 @@ jobs:
   cli:
     name: Bundle CLI ${{ matrix.target }}
     needs: prepare
+    if: ${{ inputs.dry_run || needs.prepare.outputs.exists != 'true' }}
     strategy:
       fail-fast: false
       matrix:
@@ -282,7 +294,7 @@ jobs:
   release:
     name: Publish the versioned release and refresh the tap
     needs: [prepare, package, cli]
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && (inputs.dry_run || needs.prepare.outputs.exists != 'true') }}
     env:
       FORK_TAP_TOKEN: ${{ secrets.FORK_TAP_TOKEN }}
     runs-on: ubuntu-latest
