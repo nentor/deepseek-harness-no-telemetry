@@ -275,6 +275,8 @@ jobs:
           date_tag="${{ steps.publish.outputs.tag }}"
           cask_version="${{ steps.publish.outputs.cask_version }}"
           product_version=$(jq -r .version apps/cli/package.json)
+          # Tag tarballs carry no .git metadata; the formula build takes the commit explicitly.
+          commit_hash=$(echo "${{ needs.sync.outputs.head }}" | cut -c1-7)
           src_url="https://github.com/nentor/deepseek-harness-no-telemetry/archive/refs/tags/${date_tag}.tar.gz"
           curl -sL -o src.tar.gz "$src_url"
           src_sha=$(sha256sum src.tar.gz | cut -d' ' -f1)
@@ -291,7 +293,8 @@ jobs:
             echo ''
             echo '  def install'
             echo '    system "pnpm", "install", "--frozen-lockfile"'
-            echo '    system "pnpm", "run", "build:official"'
+            echo '    # Tag tarballs carry no .git metadata; the build accepts the commit explicitly.'
+            echo "    system \"env\", \"DSH_CLIENT_COMMIT_HASH=$commit_hash\", \"pnpm\", \"run\", \"build:official\""
             echo '    system "pnpm", "--filter", "@deepseek-ai/dsh", "deploy", "--legacy", "--prod",'
             echo '            "--config.allow-unused-patches=true", "--config.node-linker=hoisted",'
             echo '            "--config.auto-install-peers=false", "--config.link-workspace-packages=true",'
