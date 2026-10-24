@@ -103,6 +103,19 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.PRIMARY_NODE_VERSION }}
+      - name: Write the local unsigned packaging settings
+        shell: bash
+        run: |
+          cd apps/desktop
+          release_id=$(openssl rand -hex 16)
+          settings='DSH_DESKTOP_APP_ID=com.deepseek.harness
+          DSH_DESKTOP_AUTO_UPDATE_ENV=test
+          DOWNLOAD_TEST_ORIGIN=https://updates.invalid
+          DOWNLOAD_TEST_RELEASE_ID='"$release_id"'
+          DSH_DESKTOP_MANDATORY_UPDATE_TEST_ORIGIN=https://updates.invalid
+          DSH_DESKTOP_MANDATORY_UPDATE_CONFIG={"allowedAuthOrigins":["https://updates.invalid"]}'
+          printf '%s\n' "$settings" > .env.macos
+          printf '%s\n' "$settings" 'DSH_DESKTOP_WINDOWS_COMPRESSION_LEVEL=3' > .env.windows
       - name: Configure the pnpm store cache
         id: pnpm-store
         shell: bash
