@@ -232,10 +232,11 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf cli-stage
-          pnpm --filter @deepseek-ai/dsh deploy --legacy --prod \
-            --config.allow-unused-patches=true --config.node-linker=hoisted \
-            --config.auto-install-peers=false --config.link-workspace-packages=true \
-            --config.hoist-workspace-packages=false cli-stage/dsh
+          # Default deploy (isolated linker, auto-installed peers): the dsh
+          # closure carries the vendored framework as peer dependencies, which
+          # the exe-style legacy/hoisted flags drop from the staged tree.
+          pnpm --filter @deepseek-ai/dsh deploy --prod \
+            --config.allow-unused-patches=true cli-stage/dsh
           mkdir -p cli-stage/dsh/bin
           cat > cli-stage/dsh/bin/dsh <<'EOF'
           #!/bin/sh
@@ -387,10 +388,11 @@ jobs:
             echo "    ENV[\"DSH_CLIENT_COMMIT_HASH\"] = \"$commit\""
             echo '    system "pnpm", "install", "--frozen-lockfile"'
             echo '    system "pnpm", "run", "build:official"'
-            echo '    system "pnpm", "--filter", "@deepseek-ai/dsh", "deploy", "--legacy", "--prod",'
-            echo '            "--config.allow-unused-patches=true", "--config.node-linker=hoisted",'
-            echo '            "--config.auto-install-peers=false", "--config.link-workspace-packages=true",'
-            echo '            "--config.hoist-workspace-packages=false", libexec'
+            echo '    # Default deploy (isolated linker, auto-installed peers): the dsh closure'
+            echo '    # carries the vendored framework as peer dependencies, which the exe-style'
+            echo '    # legacy/hoisted flags drop from the staged tree.'
+            echo '    system "pnpm", "--filter", "@deepseek-ai/dsh", "deploy", "--prod",'
+            echo '                    "--config.allow-unused-patches=true", libexec'
             echo '    (bin/"dsh").write <<~EOS'
             echo '      #!/bin/sh'
             echo '      # Standalone dsh on plain node (Desktop ships its own Electron-based launcher).'
