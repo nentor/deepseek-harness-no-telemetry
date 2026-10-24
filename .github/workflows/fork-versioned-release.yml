@@ -249,9 +249,8 @@ jobs:
           node scripts/release/write-consumer-manifest.mjs \
             --out cli-stage/dsh/package.json --from dist/npm --from dist/npm-vendor --from dist/npm-landlock
           # Optionals stay enabled: npm skips foreign-platform ones by os/cpu,
-          # while the current platform's prebuilt optionals (e.g. koffi) must
-          # install — omitting them forces a source build that the pinned
-          # versions do not survive everywhere.
+          # while the current platform prebuilt
+          # optionals (e.g. koffi) must install.
           npm install --prefix "$PWD/cli-stage/dsh" --cache "$RUNNER_TEMP/.npm-cache" \
             --no-audit --no-fund --package-lock=false
           mkdir -p cli-stage/dsh/bin
@@ -399,8 +398,8 @@ jobs:
             echo '  license "MIT"'
             echo '  depends_on "pnpm" => :build'
             echo '  depends_on "node@24"'
-            echo '  # koffi (pinned 3.1.1 by consumers) rebuilds from source when its prebuilt'
-            echo '  # optional package is omitted; CI runners provide cmake for the same reason.'
+            echo '  # koffi falls back to a source build when no prebuilt is available;'
+            echo '  # CI runners provide cmake for the same reason.'
             echo '  depends_on "cmake" => :build'
             echo ''
             echo '  def install'
