@@ -73,6 +73,8 @@ export function resolveSessionLogLimits(options: Pick<SessionLogOptions, 'maxReq
  * `_options` constructor argument is ignored and no transport is created.
  */
 export class SessionLogReporter {
+  /** TELEMETRY REMOVED: `_options` is ignored; no transport is created in this build. */
+  constructor(_options: SessionLogOptions) { void _options }
   /**
    * Enqueue one complete event without acknowledging network delivery.
    * TELEMETRY REMOVED: drops the record.
