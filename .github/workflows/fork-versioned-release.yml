@@ -248,8 +248,12 @@ jobs:
           # peer dependencies and re-resolves workspace: specs against the registry.)
           node scripts/release/write-consumer-manifest.mjs \
             --out cli-stage/dsh/package.json --from dist/npm --from dist/npm-vendor --from dist/npm-landlock
+          # Optionals stay enabled: npm skips foreign-platform ones by os/cpu,
+          # while the current platform's prebuilt optionals (e.g. koffi) must
+          # install — omitting them forces a source build that the pinned
+          # versions do not survive everywhere.
           npm install --prefix "$PWD/cli-stage/dsh" --cache "$RUNNER_TEMP/.npm-cache" \
-            --no-audit --no-fund --package-lock=false --omit=optional
+            --no-audit --no-fund --package-lock=false
           mkdir -p cli-stage/dsh/bin
           printf '%s\n' '#!/bin/sh' \
             '# dsh CLI bundle. Requires Node.js >= 24 on PATH.' \
@@ -448,9 +452,11 @@ jobs:
             echo '    raise "no packed tarballs found" if consumer["dependencies"].empty?'
             echo '    (libexec/"package.json").write(JSON.generate(consumer))'
             echo '    # Local consumer install, not a global pack install, so the global-style'
-            echo '    # std_npm_args helper does not apply here.'
+            echo '    # std_npm_args helper does not apply here. Optionals stay enabled: npm'
+            echo '    # skips foreign-platform ones by os/cpu, while the current platform prebuilt'
+            echo '    # optionals (e.g. koffi) must install.'
             echo '    system "npm", "install", "--prefix=#{libexec}", "--cache=#{buildpath}/.npm-cache",'
-            echo '                    "--no-audit", "--no-fund", "--package-lock=false", "--omit=optional"'
+            echo '                    "--no-audit", "--no-fund", "--package-lock=false"'
             echo '    # node-pty ships prebuilds for every platform; drop the ones that cannot'
             echo '    # load on this host (Homebrew rejects foreign-arch binaries in the prefix).'
             echo '    prebuilds = libexec/"node_modules/node-pty/prebuilds"'
