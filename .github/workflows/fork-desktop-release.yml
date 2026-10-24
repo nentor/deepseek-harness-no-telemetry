@@ -137,9 +137,11 @@ jobs:
           path: ${{ matrix.asset-path }}
 
   release:
-    name: Publish the rolling prerelease
+    name: Publish the release and refresh the cask
     needs: [sync, package]
     if: ${{ !cancelled() }}
+    env:
+      FORK_TAP_TOKEN: ${{ secrets.FORK_TAP_TOKEN }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -151,20 +153,83 @@ jobs:
           pattern: desktop-*
           merge-multiple: true
           path: release-assets
-      - name: Publish desktop-nightly
+      - name: Publish a per-date prerelease
+        id: publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          set -e
-          head=$(git rev-parse --short HEAD)
-          gh release delete desktop-nightly --cleanup-tag --yes 2>/dev/null || true
-          # A release absent when every packaging leg failed keeps the repo clean
-          # instead of publishing an empty tag; download artifacts stay inspectable.
+          set -euo pipefail
+          date_tag="desktop-$(date -u +%F)"
+          product_version=$(jq -r .version apps/desktop/package.json)
+          version_stamp=$(date -u +%Y%m%d)
+          cask_version="${product_version}-${version_stamp}"
+          gh release delete "desktop-nightly" --cleanup-tag --yes 2>/dev/null || true
+          gh release delete "$date_tag" --cleanup-tag --yes 2>/dev/null || true
           if [ ! -e release-assets ] || [ -z "$(find release-assets -type f -print -quit)" ]; then
             echo '::error::No desktop artifacts were produced by any packaging leg.'
             exit 1
           fi
-          gh release create desktop-nightly release-assets/* \
+          head=$(git rev-parse --short HEAD)
+          gh release create "$date_tag" release-assets/* \
             --prerelease --latest=false \
             --title "Desktop build @ $head" \
-            --notes "Rolling unsigned desktop snapshots from commit $head (${{ github.run_id }}). Downloads carry no notarization: clear the quarantine flag on macOS before first launch."
+            --notes "Unsigned desktop snapshot from commit $head. No notarization: clear the quarantine flag on macOS before first launch when downloading outside brew."
+          ls -1 release-assets/deepseek-harness-*.dmg 2>/dev/null | head -1 | grep . >/dev/null || {
+            echo '::notice::No mac DMG artifacts; a release without a cask update is published.'
+            echo "tag=$date_tag" >> "$GITHUB_OUTPUT"
+            echo "cask_version=$cask_version" >> "$GITHUB_OUTPUT"
+            echo "cask=skip" >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+          echo "tag=$date_tag" >> "$GITHUB_OUTPUT"
+          echo "cask_version=$cask_version" >> "$GITHUB_OUTPUT"
+      - name: Generate the Homebrew cask
+        id: cask
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          date_tag="${{ steps.publish.outputs.tag }}"
+          cask_version="${{ steps.publish.outputs.cask_version }}"
+          product_version=$(jq -r .version apps/desktop/package.json)
+          arm_dmg="release-assets/deepseek-harness-${product_version}-mac-arm64-unsigned.dmg"
+          intel_dmg="release-assets/deepseek-harness-${product_version}-mac-x64-unsigned.dmg"
+          arm_sha=""
+          intel_sha=""
+          if [ -f "$arm_dmg" ]; then arm_sha=$(sha256sum "$arm_dmg" | cut -d' ' -f1); fi
+          if [ -f "$intel_dmg" ]; then intel_sha=$(sha256sum "$intel_dmg" | cut -d' ' -f1); fi
+          base_url="https://github.com/nentor/deepseek-harness-no-telemetry/releases/download/${date_tag}"
+          {
+            echo 'cask "deepseek-harness" do'
+            if [ -n "$intel_sha" ]; then
+              echo '  arch arm: "arm64", intel: "x64"'
+              echo "  version \"$cask_version\""
+              echo "  sha256 arm: \"$arm_sha\", intel: \"$intel_sha\""
+              echo "  url \"${base_url}/deepseek-harness-${product_version}-mac-#{arch}-unsigned.dmg\","
+              echo '        verified: "github.com/nentor/deepseek-harness-no-telemetry/"'
+            else
+              echo "  version \"$cask_version\""
+              echo "  sha256 \"$arm_sha\""
+              echo "  url \"${base_url}/deepseek-harness-${product_version}-mac-arm64-unsigned.dmg\","
+              echo '        verified: "github.com/nentor/deepseek-harness-no-telemetry/"'
+            fi
+            echo '  name "DeepSeek Harness (no telemetry)"'
+            echo '  desc "DeepSeek agent-harness desktop, forked with outbound telemetry removed"'
+            echo '  homepage "https://github.com/nentor/deepseek-harness-no-telemetry"'
+            echo '  app "DeepSeek Harness.app"'
+            echo 'end'
+          } > cask.rb
+          cat cask.rb
+      - name: Push the cask to the tap
+        if: ${{ env.FORK_TAP_TOKEN != '' && steps.publish.outputs.cask != 'skip' }}
+        run: |
+          git clone --depth 1 "https://x-access-token:${FORK_TAP_TOKEN}@github.com/nentor/homebrew-tap.git" tap
+          mkdir -p tap/Casks
+          cp cask.rb tap/Casks/deepseek-harness.rb
+          git -C tap config user.name 'desktop-release-bot'
+          git -C tap config user.email 'desktop-release-bot@localhost'
+          git -C tap add Casks/deepseek-harness.rb
+          git -C tap diff --cached --quiet || { git -C tap commit -m "deepseek-harness ${{ steps.publish.outputs.cask_version }}"; git -C tap push; }
+      - name: Report the skip when no tap token is configured
+        if: ${{ env.FORK_TAP_TOKEN == '' && steps.publish.outputs.cask != 'skip' }}
+        run: echo '::notice::FORK_TAP_TOKEN secret is not configured; the release was published but the cask was not updated.'
