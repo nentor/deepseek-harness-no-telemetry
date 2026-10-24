@@ -422,7 +422,7 @@ jobs:
             echo '    if prebuilds.directory?'
             echo '      keep = "#{OS.kernel_name}-#{Hardware::CPU.arch.to_s.sub("x86_64", "x64")}"'
             echo '      prebuilds.children.select(&:directory?).each do |dir|'
-            echo '        rm_rf dir unless dir.basename.to_s == keep'
+            echo '        rm_rf dir if dir.basename.to_s != keep'
             echo '      end'
             echo '    end'
             echo '    (bin/"dsh").write <<~EOS'
