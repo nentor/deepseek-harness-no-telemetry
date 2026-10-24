@@ -1,0 +1,157 @@
+name: Fork Desktop Release
+
+# Sync the fork's master against the upstream repository, then package the
+# unsigned mac and windows desktop applications and publish them to a rolling
+# `desktop-nightly` prerelease on this fork. Linux packaging stays out of the
+# matrix until the runtime CLI preparation completes a linux path.
+
+on:
+  schedule:
+    # Daily catch-up for upstream changes; skipped entirely when the merge is empty.
+    - cron: '0 5 * * *'
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fork-desktop-release
+  cancel-in-progress: false
+
+env:
+  PRIMARY_NODE_VERSION: '24'
+  # Upstream CI marks telemetry-disabled runs the same way; keep the bundled
+  # runtime smoke steps quiet regardless of which composition they boot.
+  DSH_TELEMETRY_DISABLED: '1'
+
+jobs:
+  sync:
+    name: Sync master against upstream
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      merged: ${{ steps.merge.outputs.merged }}
+      head: ${{ steps.merge.outputs.head }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Configure a generic git identity for the automated merge
+        run: |
+          git config user.name 'desktop-release-bot'
+          git config user.email 'desktop-release-bot@localhost'
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/deepseek-ai/deepseek-harness.git
+          git fetch --no-tags upstream master
+      - name: Merge upstream master
+        id: merge
+        run: |
+          merged=false
+          if git merge --no-edit upstream/master; then
+            if [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/master)" ]; then
+              echo 'Upstream already merged: no new commit.'
+            else
+              merged=true
+            fi
+          else
+            git merge --abort
+            echo '::error::Upstream merge conflicts with the fork changes. Re-run locally, resolve, commit, and push.'
+            exit 1
+          fi
+          echo "merged=$merged" >> "$GITHUB_OUTPUT"
+          echo "head=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Push the synced master
+        if: ${{ steps.merge.outputs.merged == 'true' }}
+        run: |
+          git push origin "master:master" && echo '::notice::Synced the fork master.' || { echo '::error::Push rejected; re-run once the remote state is reconciled.'; exit 1; }
+
+  package:
+    name: Package ${{ matrix.target }}
+    needs: sync
+    # A scheduled run with an empty merge has nothing new to build; push and
+    # manual runs always carry their own change.
+    if: ${{ needs.sync.outputs.merged == 'true' || github.event_name != 'schedule' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: mac-arm64
+            os: macos-14
+            script: package:mac:arm64:unsigned
+            asset-path: apps/desktop/.desktop-build/targets/mac-arm64/unsigned-artifacts/*.dmg
+            asset-filter: dmg
+          - target: mac-x64
+            os: macos-13
+            script: package:mac:x64:unsigned
+            asset-path: apps/desktop/.desktop-build/targets/mac-x64/unsigned-artifacts/*.dmg
+            asset-filter: dmg
+          - target: win-x64
+            os: windows-latest
+            script: package:win:x64:unsigned
+            asset-path: apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/*.exe
+            asset-filter: exe
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.sync.outputs.head }}
+      - uses: pnpm/action-setup@v5.0.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.PRIMARY_NODE_VERSION }}
+      - name: Configure the pnpm store cache
+        id: pnpm-store
+        shell: bash
+        run: echo "path=$(pnpm store path)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Build artifacts
+        run: pnpm run build:artifacts
+      - name: Package
+        run: pnpm --filter @deepseek-ai/dsh-desktop run ${{ matrix.script }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.target }}
+          if-no-files-found: error
+          path: ${{ matrix.asset-path }}
+
+  release:
+    name: Publish the rolling prerelease
+    needs: [sync, package]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.sync.outputs.head }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: desktop-*
+          merge-multiple: true
+          path: release-assets
+      - name: Publish desktop-nightly
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          head=$(git rev-parse --short HEAD)
+          gh release delete desktop-nightly --cleanup-tag --yes 2>/dev/null || true
+          # A release absent when every packaging leg failed keeps the repo clean
+          # instead of publishing an empty tag; download artifacts stay inspectable.
+          if [ ! -e release-assets ] || [ -z "$(find release-assets -type f -print -quit)" ]; then
+            echo '::error::No desktop artifacts were produced by any packaging leg.'
+            exit 1
+          fi
+          gh release create desktop-nightly release-assets/* \
+            --prerelease --latest=false \
+            --title "Desktop build @ $head" \
+            --notes "Rolling unsigned desktop snapshots from commit $head (${{ github.run_id }}). Downloads carry no notarization: clear the quarantine flag on macOS before first launch."
