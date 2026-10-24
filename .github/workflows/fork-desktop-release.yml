@@ -130,6 +130,28 @@ jobs:
         run: pnpm run build:artifacts
       - name: Package
         run: pnpm --filter @deepseek-ai/dsh-desktop run ${{ matrix.script }}
+      - name: Inspect the packaged LibreOffice kit trees
+        if: ${{ always() && matrix.target == 'win-x64' }}
+        shell: bash
+        run: |
+          set -u
+          staging_tre="apps/desktop/.desktop-build/targets/win-x64/dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64"
+          unpacked_tre="apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/win-unpacked/resources/app.asar.unpacked/dsh/node_modules/@deepseek-ai/libreoffice-kit-win32-x64"
+          root="$(pwd)"
+          if cd "$staging_tre" 2>/dev/null; then find . | sort > /tmp/staging-list.txt; else echo 'staging tree missing'; : > /tmp/staging-list.txt; fi
+          if cd "$unpacked_tre" 2>/dev/null; then find . | sort > /tmp/unpacked-list.txt; else echo 'unpacked tree missing'; : > /tmp/unpacked-list.txt; fi
+          echo "staging files: $(grep -c . /tmp/staging-list.txt)"
+          echo "unpacked files: $(grep -c . /tmp/unpacked-list.txt)"
+          for f in prebuilds.json bin/dsoffice.exe program/program/services "program/program/services/services.rdb" program/program/types/offapi.rdb "program/share/config/wizard/form/styles/beige.css"; do
+            s=missing; u=missing
+            [ -e "$staging_tre/$f" ] && s=present
+            [ -e "$unpacked_tre/$f" ] && u=present
+            echo "$f -> staging:$s unpacked:$u"
+          done
+          echo 'Difference (staging vs unpacked listing), first 40 lines:'
+          diff /tmp/staging-list.txt /tmp/unpacked-list.txt | head -40
+          echo 'Unpacked absolute paths at 250+ chars, first 5:'
+          awk -v p="$root" '{ line = p "/" substr($0, 3); if (length(line) >= 250) print length(line), line }' /tmp/unpacked-list.txt | head -5
       - uses: actions/upload-artifact@v4
         with:
           name: desktop-${{ matrix.target }}
