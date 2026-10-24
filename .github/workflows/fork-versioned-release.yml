@@ -226,31 +226,42 @@ jobs:
       - name: Build the official CLI closure
         working-directory: ${{ matrix.workspace-root }}
         run: pnpm run build:official
-      - name: Stage the portable CLI tree
+      - name: Pack the release families
+        working-directory: ${{ matrix.workspace-root }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm run release:pack --family dsh --out dist/npm
+          pnpm run release:pack --family vendor --out dist/npm-vendor
+          pnpm --dir native/system run build:ts
+          pnpm --dir native/system/packages/entry pack --pack-destination "$PWD/dist/npm-landlock"
+      - name: Install the portable CLI tree from local tarballs
         working-directory: ${{ matrix.workspace-root }}
         shell: bash
         run: |
           set -euo pipefail
           rm -rf cli-stage
-          # Default deploy (isolated linker, auto-installed peers): the dsh
-          # closure carries the vendored framework as peer dependencies, which
-          # the exe-style legacy/hoisted flags drop from the staged tree.
-          pnpm --filter @deepseek-ai/dsh deploy --prod \
-            --config.allow-unused-patches=true cli-stage/dsh
+          mkdir -p cli-stage/dsh
+          # Same consumer-manifest mapping as verify-packed-install.ts: every
+          # workspace dependency resolves from a file: URL, so the registry can
+          # never substitute upstream builds. (pnpm deploy drops the vendored
+          # peer dependencies and re-resolves workspace: specs against the registry.)
+          node scripts/release/write-consumer-manifest.mjs \
+            --out cli-stage/dsh/package.json --from dist/npm --from dist/npm-vendor --from dist/npm-landlock
+          npm install --prefix "$PWD/cli-stage/dsh" --cache "$RUNNER_TEMP/.npm-cache" \
+            --no-audit --no-fund --package-lock=false --omit=optional
           mkdir -p cli-stage/dsh/bin
-          cat > cli-stage/dsh/bin/dsh <<'EOF'
-          #!/bin/sh
-          # dsh CLI bundle. Requires Node.js >= 24 on PATH.
-          D=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
-          exec node "$D/lib/bin.js" "$@"
-          EOF
+          printf '%s\n' '#!/bin/sh' \
+            '# dsh CLI bundle. Requires Node.js >= 24 on PATH.' \
+            'D=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)' \
+            'exec node "$D/node_modules/@deepseek-ai/dsh/lib/bin.js" "$@"' \
+            > cli-stage/dsh/bin/dsh
           chmod 755 cli-stage/dsh/bin/dsh
-          cat > cli-stage/dsh/bin/dsh.cmd <<'EOF'
-          @echo off
-          REM dsh CLI bundle. Requires Node.js >= 24 on PATH.
-          node "%~dp0..\lib\bin.js" %*
-          EOF
-          test -f cli-stage/dsh/lib/bin.js || { echo '::error::deploy did not stage lib/bin.js'; exit 1; }
+          printf '%s\n' '@echo off' \
+            'REM dsh CLI bundle. Requires Node.js >= 24 on PATH.' \
+            'node "%~dp0..\node_modules\@deepseek-ai\dsh\lib\bin.js" %*' \
+            > cli-stage/dsh/bin/dsh.cmd
+          test -f cli-stage/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js || { echo '::error::consumer install did not stage the dsh entry'; exit 1; }
       - name: Archive the CLI bundle
         working-directory: ${{ matrix.workspace-root }}
         shell: bash
@@ -388,15 +399,24 @@ jobs:
             echo "    ENV[\"DSH_CLIENT_COMMIT_HASH\"] = \"$commit\""
             echo '    system "pnpm", "install", "--frozen-lockfile"'
             echo '    system "pnpm", "run", "build:official"'
-            echo '    # Default deploy (isolated linker, auto-installed peers): the dsh closure'
-            echo '    # carries the vendored framework as peer dependencies, which the exe-style'
-            echo '    # legacy/hoisted flags drop from the staged tree.'
-            echo '    system "pnpm", "--filter", "@deepseek-ai/dsh", "deploy", "--prod",'
-            echo '                    "--config.allow-unused-patches=true", libexec'
+            echo '    # Pack the workspace and install from local tarballs exactly like CI'
+            echo '    # packed-install verification: every workspace dependency resolves from a'
+            echo '    # file: URL, so the registry can never substitute upstream builds.'
+            echo '    # (pnpm deploy drops the vendored peer dependencies and re-resolves'
+            echo '    # workspace: specs against the registry.)'
+            echo '    system "pnpm", "run", "release:pack", "--family", "dsh", "--out", "dist/npm"'
+            echo '    system "pnpm", "run", "release:pack", "--family", "vendor", "--out", "dist/npm-vendor"'
+            echo '    system "pnpm", "--dir", "native/system", "run", "build:ts"'
+            echo '    system "pnpm", "--dir", "native/system/packages/entry", "pack", "--pack-destination", "#{buildpath}/dist/npm-landlock"'
+            echo '    system "node", "scripts/release/write-consumer-manifest.mjs",'
+            echo '                    "--out", "#{libexec}/package.json",'
+            echo '                    "--from", "dist/npm", "--from", "dist/npm-vendor", "--from", "dist/npm-landlock"'
+            echo '    system "npm", "install", "--prefix=#{libexec}", "--cache=#{buildpath}/.npm-cache",'
+            echo '                    "--no-audit", "--no-fund", "--package-lock=false", "--omit=optional"'
             echo '    (bin/"dsh").write <<~EOS'
             echo '      #!/bin/sh'
             echo '      # Standalone dsh on plain node (Desktop ships its own Electron-based launcher).'
-            echo '      exec "#{formula_opt_bin("node@24")}/node" "#{libexec}/lib/bin.js" "$@"'
+            echo '      exec "#{formula_opt_bin("node@24")}/node" "#{libexec}/node_modules/@deepseek-ai/dsh/lib/bin.js" "$@"'
             echo '    EOS'
             echo '    chmod 0755, bin/"dsh"'
             echo '  end'
