@@ -4,6 +4,9 @@ name: Fork Desktop Release
 # unsigned mac and windows desktop applications and publish them to a rolling
 # `desktop-nightly` prerelease on this fork. Linux packaging stays out of the
 # matrix until the runtime CLI preparation completes a linux path.
+#
+# Rolling prereleases never touch the Homebrew tap: the tap tracks stable
+# `dsh-v<VERSION>-no-telemetry` releases published by fork-versioned-release.yml.
 
 on:
   schedule:
@@ -186,8 +189,6 @@ jobs:
     name: Publish the release and refresh the cask
     needs: [sync, package]
     if: ${{ !cancelled() }}
-    env:
-      FORK_TAP_TOKEN: ${{ secrets.FORK_TAP_TOKEN }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -207,8 +208,6 @@ jobs:
           set -euo pipefail
           date_tag="desktop-$(date -u +%F)"
           product_version=$(jq -r .version apps/desktop/package.json)
-          version_stamp=$(date -u +%Y%m%d)
-          cask_version="${product_version}-${version_stamp}"
           gh release delete "desktop-nightly" --cleanup-tag --yes 2>/dev/null || true
           gh release delete "$date_tag" --cleanup-tag --yes 2>/dev/null || true
           if [ ! -e release-assets ] || [ -z "$(find release-assets -type f -print -quit)" ]; then
@@ -221,109 +220,6 @@ jobs:
             --title "Desktop build @ $head" \
             --notes "Unsigned desktop snapshot from commit $head. No notarization: clear the quarantine flag on macOS before first launch when downloading outside brew."
           ls -1 release-assets/deepseek-harness-*.dmg 2>/dev/null | head -1 | grep . >/dev/null || {
-            echo '::notice::No mac DMG artifacts; a release without a cask update is published.'
-            echo "tag=$date_tag" >> "$GITHUB_OUTPUT"
-            echo "cask_version=$cask_version" >> "$GITHUB_OUTPUT"
-            echo "cask=skip" >> "$GITHUB_OUTPUT"
+            echo '::notice::No mac DMG artifacts were produced by any packaging leg.'
             exit 0
           }
-          echo "tag=$date_tag" >> "$GITHUB_OUTPUT"
-          echo "cask_version=$cask_version" >> "$GITHUB_OUTPUT"
-      - name: Generate the Homebrew cask
-        id: cask
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          date_tag="${{ steps.publish.outputs.tag }}"
-          cask_version="${{ steps.publish.outputs.cask_version }}"
-          product_version=$(jq -r .version apps/desktop/package.json)
-          arm_dmg="release-assets/deepseek-harness-${product_version}-mac-arm64-unsigned.dmg"
-          intel_dmg="release-assets/deepseek-harness-${product_version}-mac-x64-unsigned.dmg"
-          arm_sha=""
-          intel_sha=""
-          if [ -f "$arm_dmg" ]; then arm_sha=$(sha256sum "$arm_dmg" | cut -d' ' -f1); fi
-          if [ -f "$intel_dmg" ]; then intel_sha=$(sha256sum "$intel_dmg" | cut -d' ' -f1); fi
-          base_url="https://github.com/nentor/deepseek-harness-no-telemetry/releases/download/${date_tag}"
-          {
-            echo 'cask "deepseek-harness" do'
-            if [ -n "$intel_sha" ]; then
-              echo '  arch arm: "arm64", intel: "x64"'
-              echo "  version \"$cask_version\""
-              echo "  sha256 arm: \"$arm_sha\", intel: \"$intel_sha\""
-              echo "  url \"${base_url}/deepseek-harness-${product_version}-mac-#{arch}-unsigned.dmg\""
-            else
-              echo "  version \"$cask_version\""
-              echo "  sha256 \"$arm_sha\""
-              echo "  url \"${base_url}/deepseek-harness-${product_version}-mac-arm64-unsigned.dmg\""
-            fi
-            echo '  name "DeepSeek Harness (no telemetry)"'
-            echo '  desc "DeepSeek agent-harness desktop, forked with outbound telemetry removed"'
-            echo '  homepage "https://github.com/nentor/deepseek-harness-no-telemetry"'
-            echo '  app "DeepSeek Harness.app"'
-            echo '  binary "#{appdir}/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh", target: "dsh"'
-            echo '  caveats "Unsigned build: clear quarantine before first launch: xattr -dr com.apple.quarantine /Applications/Deep Seek Harness.app"'
-            echo 'end'
-          } > cask.rb
-          cat cask.rb
-      - name: Generate the Homebrew formula
-        id: formula
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          date_tag="${{ steps.publish.outputs.tag }}"
-          cask_version="${{ steps.publish.outputs.cask_version }}"
-          product_version=$(jq -r .version apps/cli/package.json)
-          # Tag tarballs carry no .git metadata; the formula build takes the commit explicitly.
-          commit_hash=$(echo "${{ needs.sync.outputs.head }}" | cut -c1-7)
-          src_url="https://github.com/nentor/deepseek-harness-no-telemetry/archive/refs/tags/${date_tag}.tar.gz"
-          curl -sL -o src.tar.gz "$src_url"
-          src_sha=$(sha256sum src.tar.gz | cut -d' ' -f1)
-          {
-            echo 'class Dsh < Formula'
-            echo '  desc "Agent-harness CLI (no-telemetry fork)"'
-            echo '  homepage "https://github.com/nentor/deepseek-harness-no-telemetry"'
-            echo "  url \"$src_url\""
-            echo "  version \"$cask_version\""
-            echo "  sha256 \"$src_sha\""
-            echo '  license "MIT"'
-            echo '  depends_on "pnpm" => :build'
-            echo '  depends_on "node@24"'
-            echo ''
-            echo '  def install'
-            echo '    system "pnpm", "install", "--frozen-lockfile"'
-            echo '    # Tag tarballs carry no .git metadata; the build accepts the commit explicitly.'
-            echo "    system \"env\", \"DSH_CLIENT_COMMIT_HASH=$commit_hash\", \"pnpm\", \"run\", \"build:official\""
-            echo '    system "pnpm", "--filter", "@deepseek-ai/dsh", "deploy", "--legacy", "--prod",'
-            echo '            "--config.allow-unused-patches=true", "--config.node-linker=hoisted",'
-            echo '            "--config.auto-install-peers=false", "--config.link-workspace-packages=true",'
-            echo '            "--config.hoist-workspace-packages=false", libexec'
-            echo '    (bin/"dsh").write <<~EOS'
-            echo '      #!/bin/sh'
-            echo '      # Standalone dsh on plain node (Desktop ships its own Electron-based launcher).'
-            echo '      exec "#{formula_opt_bin("node@24")}/node" "#{libexec}/lib/bin.js" "$@"'
-            echo '    EOS'
-            echo '    chmod 0755, bin/"dsh"'
-            echo '  end'
-            echo ''
-            echo '  test do'
-            echo '    assert_match "'"$product_version"'", shell_output("#{bin}/dsh --version")'
-            echo '  end'
-            echo 'end'
-          } > dsh.rb
-          cat dsh.rb
-      - name: Push the cask and formula to the tap
-        if: ${{ env.FORK_TAP_TOKEN != '' && steps.publish.outputs.cask != 'skip' }}
-        run: |
-          git clone --depth 1 "https://x-access-token:${FORK_TAP_TOKEN}@github.com/nentor/homebrew-tap.git" tap
-          mkdir -p tap/Casks tap/Formula
-          cp cask.rb tap/Casks/deepseek-harness.rb
-          cp dsh.rb tap/Formula/dsh.rb
-          git -C tap config user.name 'desktop-release-bot'
-          git -C tap config user.email 'desktop-release-bot@localhost'
-          git -C tap add Casks/deepseek-harness.rb Formula/dsh.rb
-          git -C tap diff --cached --quiet || { git -C tap commit -m "deepseek-harness ${{ steps.publish.outputs.cask_version }}"; git -C tap push; }
-      - name: Report the skip when no tap token is configured
-        if: ${{ env.FORK_TAP_TOKEN == '' && steps.publish.outputs.cask != 'skip' }}
-        run: echo '::notice::FORK_TAP_TOKEN secret is not configured; the release was published but the cask was not updated.'
