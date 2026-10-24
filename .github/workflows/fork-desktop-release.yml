@@ -263,18 +263,65 @@ jobs:
             echo '  desc "DeepSeek agent-harness desktop, forked with outbound telemetry removed"'
             echo '  homepage "https://github.com/nentor/deepseek-harness-no-telemetry"'
             echo '  app "DeepSeek Harness.app"'
+            echo '  binary "#{appdir}/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh", target: "dsh"'
+            echo '  caveats "Unsigned build: clear quarantine before first launch: xattr -dr com.apple.quarantine /Applications/Deep Seek Harness.app"'
             echo 'end'
           } > cask.rb
           cat cask.rb
-      - name: Push the cask to the tap
+      - name: Generate the Homebrew formula
+        id: formula
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          date_tag="${{ steps.publish.outputs.tag }}"
+          cask_version="${{ steps.publish.outputs.cask_version }}"
+          product_version=$(jq -r .version apps/cli/package.json)
+          src_url="https://github.com/nentor/deepseek-harness-no-telemetry/archive/refs/tags/${date_tag}.tar.gz"
+          curl -sL -o src.tar.gz "$src_url"
+          src_sha=$(sha256sum src.tar.gz | cut -d' ' -f1)
+          {
+            echo 'class Dsh < Formula'
+            echo '  desc "dsh CLI from the no-telemetry DeepSeek Harness fork"'
+            echo '  homepage "https://github.com/nentor/deepseek-harness-no-telemetry"'
+            echo "  url \"$src_url\""
+            echo "  sha256 \"$src_sha\""
+            echo "  version \"$cask_version\""
+            echo '  license "MIT"'
+            echo '  depends_on "node@24"'
+            echo '  depends_on "pnpm" => :build'
+            echo ''
+            echo '  def install'
+            echo '    system "pnpm", "install", "--frozen-lockfile"'
+            echo '    system "pnpm", "run", "build:official"'
+            echo '    system "pnpm", "--filter", "@deepseek-ai/dsh", "deploy", "--legacy", "--prod",'
+            echo '            "--config.allow-unused-patches=true", "--config.node-linker=hoisted",'
+            echo '            "--config.auto-install-peers=false", "--config.link-workspace-packages=true",'
+            echo '            "--config.hoist-workspace-packages=false", libexec'
+            echo '    (bin/"dsh").write <<~EOS'
+            echo '      #!/bin/sh'
+            echo '      # Standalone dsh on plain node (Desktop ships its own Electron-based launcher).'
+            echo '      exec "#{Formula["node@24"].opt_bin}/node" "#{libexec}/lib/bin.js" "$@"'
+            echo '    EOS'
+            echo '    chmod 0755, bin/"dsh"'
+            echo '  end'
+            echo ''
+            echo '  test do'
+            echo '    assert_match "'"$product_version"'", shell_output("#{bin}/dsh --version")'
+            echo '  end'
+            echo 'end'
+          } > dsh.rb
+          cat dsh.rb
+      - name: Push the cask and formula to the tap
         if: ${{ env.FORK_TAP_TOKEN != '' && steps.publish.outputs.cask != 'skip' }}
         run: |
           git clone --depth 1 "https://x-access-token:${FORK_TAP_TOKEN}@github.com/nentor/homebrew-tap.git" tap
-          mkdir -p tap/Casks
+          mkdir -p tap/Casks tap/Formula
           cp cask.rb tap/Casks/deepseek-harness.rb
+          cp dsh.rb tap/Formula/dsh.rb
           git -C tap config user.name 'desktop-release-bot'
           git -C tap config user.email 'desktop-release-bot@localhost'
-          git -C tap add Casks/deepseek-harness.rb
+          git -C tap add Casks/deepseek-harness.rb Formula/dsh.rb
           git -C tap diff --cached --quiet || { git -C tap commit -m "deepseek-harness ${{ steps.publish.outputs.cask_version }}"; git -C tap push; }
       - name: Report the skip when no tap token is configured
         if: ${{ env.FORK_TAP_TOKEN == '' && steps.publish.outputs.cask != 'skip' }}
