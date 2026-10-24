@@ -280,6 +280,11 @@
 
     - id: office-to-pdf
       name: '@deepseek-ai/dsh-office-to-pdf'
+      # Unsigned release legs build the mac-x64 runtime on ARM macOS and run its
+      # x64 LibreOffice helper under Rosetta, where a cold first conversion takes
+      # minutes; keep one bounded per-attempt budget above that.
+      config:
+        timeoutMs: 240000
 
     # The right Sidebar's document tab: bounded file reads with selectable
     # Markdown, code, HTML, PDF, Office, and plain-text renderers.
