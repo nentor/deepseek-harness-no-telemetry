@@ -39,6 +39,8 @@ export interface EventLogOptions {
  * `_options` constructor argument is ignored and no transport is created.
  */
 export class EventLogReporter {
+  /** TELEMETRY REMOVED: `_options` is ignored; no transport is created in this build. */
+  constructor(_options: EventLogOptions) { void _options }
   /**
    * Enqueue caller-selected analytics fields without acknowledging delivery.
    * TELEMETRY REMOVED: drops the record.
