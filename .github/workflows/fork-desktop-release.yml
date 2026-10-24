@@ -251,13 +251,11 @@ jobs:
               echo '  arch arm: "arm64", intel: "x64"'
               echo "  version \"$cask_version\""
               echo "  sha256 arm: \"$arm_sha\", intel: \"$intel_sha\""
-              echo "  url \"${base_url}/deepseek-harness-${product_version}-mac-#{arch}-unsigned.dmg\","
-              echo '        verified: "github.com/nentor/deepseek-harness-no-telemetry/"'
+              echo "  url \"${base_url}/deepseek-harness-${product_version}-mac-#{arch}-unsigned.dmg\""
             else
               echo "  version \"$cask_version\""
               echo "  sha256 \"$arm_sha\""
-              echo "  url \"${base_url}/deepseek-harness-${product_version}-mac-arm64-unsigned.dmg\","
-              echo '        verified: "github.com/nentor/deepseek-harness-no-telemetry/"'
+              echo "  url \"${base_url}/deepseek-harness-${product_version}-mac-arm64-unsigned.dmg\""
             fi
             echo '  name "DeepSeek Harness (no telemetry)"'
             echo '  desc "DeepSeek agent-harness desktop, forked with outbound telemetry removed"'
