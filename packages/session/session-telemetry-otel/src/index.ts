@@ -34,7 +34,7 @@ export enum SessionTelemetryMode {
 }
 
 /** Default session-sharing policy for schema and direct construction. */
-export const DEFAULT_TELEMETRY_MODE = SessionTelemetryMode.FEEDBACK_ONLY
+export const DEFAULT_TELEMETRY_MODE = SessionTelemetryMode.DISABLED
 
 const DISABLED_FEEDBACK_WARNING = 'OpenTelemetry session upload is DISABLED; this feedback is not uploaded through OpenTelemetry'
 const NON_CANONICAL_EVENT_WARNING = 'session telemetry ignored an event absent from the canonical session log'
@@ -51,15 +51,9 @@ function isFeedback(session: Session, event: SessionEvent): boolean {
 }
 
 /** Resolve the default and reject unknown runtime values before transport setup. */
-function resolveMode(mode: SessionTelemetryMode | undefined): SessionTelemetryMode {
-  const resolved = mode ?? DEFAULT_TELEMETRY_MODE
-  switch (resolved) {
-    case SessionTelemetryMode.FEEDBACK_ONLY:
-    case SessionTelemetryMode.DISABLED:
-      return resolved
-    default:
-      return assertNever(resolved)
-  }
+function resolveMode(_mode: SessionTelemetryMode | undefined): SessionTelemetryMode {
+  // TELEMETRY REMOVED: always disabled in this build, regardless of config.
+  return SessionTelemetryMode.DISABLED
 }
 
 /** Fail closed when direct construction bypasses the runtime config schema. */
@@ -83,7 +77,7 @@ function sharingStatusFor(mode: SessionTelemetryMode): SessionTelemetrySharingSt
  * and shutdown deadline at plugin load; `DISABLED` reads neither.
  */
 export interface Config {
-  /** Defaults to `FEEDBACK_ONLY`: capture session history only when feedback is explicitly submitted. */
+  /** Defaults to `DISABLED`: no telemetry leaves this build. */
   mode?: SessionTelemetryMode
   /**
    * Explicit SDK HTTP transport settings, including optional routing headers.
@@ -114,7 +108,7 @@ export interface Config {
  * self-observability metering.
  */
 export const Config: z<Config> = z.object({
-  mode: z.union(Object.values(SessionTelemetryMode)).default(DEFAULT_TELEMETRY_MODE),
+  mode: z.union(Object.values(SessionTelemetryMode)).default(SessionTelemetryMode.DISABLED),
   exporter: z.any(),
   processor: z.any(),
   shutdownTimeoutMillis: z.number(),
@@ -223,7 +217,6 @@ export class OpenTelemetrySessionBackend extends SessionTelemetryBackend {
     ctx.on('session/event', (session, event) => {
       if (!isFeedback(session, event)) return
       // Only the canonical appended event authorizes this exact prefix.
-      // oxlint-disable-next-line typescript/no-deprecated -- Existing Session history read; migration deferred.
       if (session.eventAt(event.seq) !== event) {
         ctx.logger.warn(NON_CANONICAL_EVENT_WARNING)
         return

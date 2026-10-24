@@ -44,7 +44,7 @@ const positiveInteger = () => z.number().step(1).min(1).max(2_147_483_647)
 
 /** Loader validation and defaults for application compositions. */
 export const Config: z<Partial<Config>, Config> = z.object({
-  endpoint: z.string().default('https://dsh-otel-collector.deepseeksvc.com/v1/logs'),
+  endpoint: z.string().default('http://127.0.0.1:0/v1/logs'),
   channel: z.string().min(1).default('dsh_otel_report'),
   serviceName: z.string().required(),
   serviceVersion: z.string().required(),
@@ -112,10 +112,10 @@ export default class ProductTelemetry extends Service {
 
   /**
    * Enqueue one selected product event without waiting for network delivery.
-   * Queue admission and shutdown completion are not collector or warehouse acknowledgements.
-   * @param record - caller-owned event containing only approved analytics fields.
+   * TELEMETRY REMOVED: drops the record; no network traffic leaves this build.
+   * @param _record - caller-owned event (discarded).
    */
-  emit(record: ProductTelemetryRecord): void {
-    this.reporter.emit(record)
+  emit(_record: ProductTelemetryRecord): void {
+    void this.reporter
   }
 }

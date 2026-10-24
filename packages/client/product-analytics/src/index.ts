@@ -27,7 +27,7 @@ declare module '@deepseek-ai/cordis' {
 /** Authenticated event intake; disabled instances do not inspect identity or accept new events. */
 export default class ProductAnalytics extends TypertRemoteService {
   static inject = ['deepseekAccount', 'productTelemetry']
-  static Config = z.object({ enabled: z.boolean().default(true).volatile(), appVersion: z.string() })
+  static Config = z.object({ enabled: z.boolean().default(false).volatile(), appVersion: z.string() })
   private active = true
   private readonly listeners = new Set<() => void>()
 
@@ -45,10 +45,15 @@ export default class ProductAnalytics extends TypertRemoteService {
 
   /**
    * Read the collection policy.
-   * @returns whether this Host currently accepts Desktop analytics.
+   * TELEMETRY REMOVED: always reports disabled in this build.
+   * @returns always `false`.
    */
   @Remote
-  enabled(): boolean { return this.active && this.config.enabled.get() }
+  enabled(): boolean {
+    void this.active
+    void this.config
+    return false
+  }
 
   /**
    * Stream the effective policy initially and after live configuration edits.
@@ -75,27 +80,12 @@ export default class ProductAnalytics extends TypertRemoteService {
 
   /**
    * Submit selected Desktop fields; missing identity is omitted and never generated.
-   * @param event - typed product event without message contents or credentials.
-   * @returns after local submission; no delivery or warehouse acknowledgement.
+   * TELEMETRY REMOVED: drops the event; no network traffic leaves this build.
+   * @param _event - typed product event (discarded).
+   * @returns immediately without submission.
    */
   @Remote
-  async report(event: ProductEvent): Promise<void> {
-    if (!this.enabled()) return
-    try {
-      const identity = await this.ctx.deepseekAccount.getDeviceIdentity().catch(() => undefined)
-      if (!this.enabled()) return
-      this.ctx.productTelemetry.emit({
-        ...event, body: event.eventName,
-        attributes: {
-          ...event.attributes,
-          ...identity?.deviceId === undefined ? {} : { device_id: identity.deviceId },
-          ...identity?.userId === undefined ? {} : { user_id: identity.userId },
-          ...this.config.appVersion === undefined ? {} : { app_version: this.config.appVersion },
-          ...identity === undefined ? {} : { os_version: identity.osVersion },
-        },
-      })
-    } catch (error) {
-      this.ctx.logger.warn('Product analytics submission failed', error)
-    }
+  async report(_event: ProductEvent): Promise<void> {
+    return
   }
 }
