@@ -85,7 +85,7 @@ jobs:
             asset-path: apps/desktop/.desktop-build/targets/mac-arm64/unsigned-artifacts/*.dmg
             asset-filter: dmg
           - target: mac-x64
-            os: macos-13
+            os: macos-14
             script: package:mac:x64:unsigned
             workspace-root: .
             asset-path: apps/desktop/.desktop-build/targets/mac-x64/unsigned-artifacts/*.dmg
@@ -117,6 +117,9 @@ jobs:
           shopt -s dotglob
           mkdir -p /d/dshrepo
           mv "$GITHUB_WORKSPACE"/* /d/dshrepo/
+      - name: Enable Rosetta for the x64 target runtime
+        if: ${{ matrix.target == 'mac-x64' }}
+        run: /usr/sbin/softwareupdate --install-rosetta --agree-to-license
       - name: Write the local unsigned packaging settings
         working-directory: ${{ matrix.workspace-root }}
         shell: bash
