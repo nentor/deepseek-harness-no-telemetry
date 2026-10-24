@@ -280,14 +280,14 @@ jobs:
           src_sha=$(sha256sum src.tar.gz | cut -d' ' -f1)
           {
             echo 'class Dsh < Formula'
-            echo '  desc "dsh CLI from the no-telemetry DeepSeek Harness fork"'
+            echo '  desc "Agent-harness CLI (no-telemetry fork)"'
             echo '  homepage "https://github.com/nentor/deepseek-harness-no-telemetry"'
             echo "  url \"$src_url\""
-            echo "  sha256 \"$src_sha\""
             echo "  version \"$cask_version\""
+            echo "  sha256 \"$src_sha\""
             echo '  license "MIT"'
-            echo '  depends_on "node@24"'
             echo '  depends_on "pnpm" => :build'
+            echo '  depends_on "node@24"'
             echo ''
             echo '  def install'
             echo '    system "pnpm", "install", "--frozen-lockfile"'
@@ -299,7 +299,7 @@ jobs:
             echo '    (bin/"dsh").write <<~EOS'
             echo '      #!/bin/sh'
             echo '      # Standalone dsh on plain node (Desktop ships its own Electron-based launcher).'
-            echo '      exec "#{Formula["node@24"].opt_bin}/node" "#{libexec}/lib/bin.js" "$@"'
+            echo '      exec "#{formula_opt_bin("node@24")}/node" "#{libexec}/lib/bin.js" "$@"'
             echo '    EOS'
             echo '    chmod 0755, bin/"dsh"'
             echo '  end'
