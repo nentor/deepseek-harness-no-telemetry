@@ -143,7 +143,7 @@ export class DeepSeekAdapter<C extends Connection = Connection> extends LlmAdapt
             ...auth.headers,
             'anthropic-version': '2023-06-01',
             ...betas.length === 0 ? {} : { 'anthropic-beta': betas.join(',') },
-            'x-deepseek-harness-user-id': this.dependencies.resolveUserId(),
+            // TELEMETRY REMOVED: no per-install user-id header leaves this build.
             ...options.sessionId === undefined ? {} : { 'x-deepseek-harness-session-id': String(options.sessionId) },
             ...options.purpose === 'compaction' ? { 'x-deepseek-harness-compact': '1' } : {},
           },

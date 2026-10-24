@@ -44,7 +44,8 @@
 - insert:
     - id: desktop-product-telemetry
       name: '@deepseek-ai/dsh-host-product-telemetry-otel'
-      disabled: !!js "ctx.get('profileContext')?.name !== 'desktop'"
+      # TELEMETRY REMOVED (local no-telemetry build): never send product analytics.
+      disabled: true
       config:
         scheduledDelayMillis: 30000
         timeoutMillis: 15000
@@ -52,13 +53,14 @@
         shutdownTimeoutMillis: 2000
         serviceName: deepseek-harness-desktop
         serviceVersion: !!js process.env.DSH_CLIENT_VERSION
-        endpoint: !!js process.env.DSH_PRODUCT_ANALYTICS_OTLP_URL
+        endpoint: http://127.0.0.1:0/v1/logs
 
     - id: product-analytics
       name: '@deepseek-ai/dsh-client-product-analytics'
-      disabled: !!js "ctx.get('profileContext')?.name !== 'desktop'"
+      # TELEMETRY REMOVED (local no-telemetry build): collection stays off.
+      disabled: true
       config:
-        enabled: true
+        enabled: false
         appVersion: !!js process.env.DSH_CLIENT_VERSION
 
     # Host-owned opt-in sampled when a new Web session receives its preset
