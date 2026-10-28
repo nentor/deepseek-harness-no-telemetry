@@ -332,14 +332,29 @@ jobs:
             echo '::error::No artifacts were produced by any packaging leg.'
             exit 1
           fi
+          # Mirror the upstream changelog for this version underneath the fork
+          # header, so the release reads like its upstream counterpart. Absent
+          # upstream notes (or no network) fall back to the header alone.
+          upstream_notes="$(gh release view "dsh-v${version}" -R deepseek-ai/deepseek-harness --json body --jq .body 2>/dev/null || true)"
+          {
+            echo "No-telemetry fork of DeepSeek Harness $version (upstream-identical version; telemetry removed at the source)."
+            echo ""
+            echo "Install: \`brew tap nentor/tap && brew install --cask deepseek-harness\` (Desktop + CLI) or \`brew install dsh\` (CLI only)."
+            echo "Desktop builds are unsigned: clear quarantine before first launch (see tap caveats)."
+            echo "Intel Mac CLI: use the formula (source build); prebuilt CLI bundles ship mac-arm64 and win-x64."
+            if [ -n "$upstream_notes" ]; then
+              echo ""
+              echo "---"
+              echo ""
+              echo "## Upstream changes in $version"
+              echo ""
+              echo "$upstream_notes"
+            fi
+          } > release-notes.md
           gh release create "$tag" release-assets/* \
             --latest=true \
             --title "dsh $version (no telemetry)" \
-            --notes "No-telemetry fork of DeepSeek Harness $version (upstream-identical version; telemetry removed at the source).
-
-          Install: \`brew tap nentor/tap && brew install --cask deepseek-harness\` (Desktop + CLI) or \`brew install dsh\` (CLI only).
-          Desktop builds are unsigned: clear quarantine before first launch (see tap caveats).
-          Intel Mac CLI: use the formula (source build); prebuilt CLI bundles ship mac-arm64 and win-x64."
+            --notes-file release-notes.md
       - name: Generate the Homebrew cask
         id: cask
         if: ${{ !inputs.dry_run }}
