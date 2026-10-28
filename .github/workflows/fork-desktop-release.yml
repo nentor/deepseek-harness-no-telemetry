@@ -18,6 +18,9 @@ on:
 
 permissions:
   contents: write
+  # The sync job pushes upstream merges that routinely touch workflow files;
+  # without this, GitHub rejects the push and every scheduled run fails.
+  workflows: write
 
 concurrency:
   group: fork-desktop-release
@@ -186,9 +189,11 @@ jobs:
           path: ${{ matrix.asset-path }}
 
   release:
-    name: Publish the release and refresh the cask
+    name: Publish the rolling prerelease
     needs: [sync, package]
-    if: ${{ !cancelled() }}
+    # Quiet schedule days build nothing, so there is nothing to publish;
+    # push and manual runs always carry their own change.
+    if: ${{ !cancelled() && (needs.sync.outputs.merged == 'true' || github.event_name != 'schedule') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
