@@ -18,9 +18,11 @@ on:
 
 permissions:
   contents: write
-  # The sync job pushes upstream merges that routinely touch workflow files;
-  # without this, GitHub rejects the push and every scheduled run fails.
-  workflows: write
+  # NOTE: the sync job pushes upstream merges that routinely touch workflow
+  # files. That push is allowed by the repository Actions setting
+  # (Settings → Actions → General → Workflow permissions → Read and write),
+  # not by anything declared here: `workflows` is not a valid permissions key
+  # and adding it breaks parsing of this file.
 
 concurrency:
   group: fork-desktop-release
