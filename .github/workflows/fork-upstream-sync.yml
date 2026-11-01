@@ -1,0 +1,57 @@
+name: Fork Upstream Sync
+
+# Merge upstream master into this fork while retaining the no-telemetry patches.
+# Versioned releases are built separately by fork-versioned-release.yml.
+
+on:
+  schedule:
+    - cron: '0 5 * * *'
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  # The sync job pushes upstream merges that routinely touch workflow files.
+  # That push requires Settings → Actions → General → Workflow permissions →
+  # Read and write; `workflows` is not a valid permissions key.
+
+concurrency:
+  group: fork-upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Sync master against upstream
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Configure a generic git identity for the automated merge
+        run: |
+          git config user.name 'desktop-release-bot'
+          git config user.email 'desktop-release-bot@localhost'
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/deepseek-ai/deepseek-harness.git
+          git fetch --no-tags upstream master
+      - name: Merge upstream master
+        id: merge
+        run: |
+          if git merge --no-edit upstream/master; then
+            if [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/master)" ]; then
+              echo 'Upstream already merged: no new commit.'
+            else
+              echo 'merged=true' >> "$GITHUB_OUTPUT"
+            fi
+          else
+            git merge --abort
+            echo '::error::Upstream merge conflicts with the fork changes. Re-run locally, resolve, commit, and push.'
+            exit 1
+          fi
+      - name: Push the synced master
+        if: ${{ steps.merge.outputs.merged == 'true' }}
+        run: |
+          git push origin "master:master" && echo '::notice::Synced the fork master.' || { echo '::error::Push rejected; re-run once the remote state is reconciled.'; exit 1; }

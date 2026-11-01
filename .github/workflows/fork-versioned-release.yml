@@ -1,10 +1,8 @@
 name: Fork versioned release
 
-# Stable no-telemetry releases: package versions stay identical to upstream
-# (never suffixed in manifests), while the release itself carries the fork
-# marker: tag `dsh-v<VERSION>-no-telemetry` with Desktop installers and
-# prebuilt CLI bundles attached. The Homebrew tap tracks these stable
-# releases only; the rolling `desktop-YYYY-MM-DD` prereleases stay off the tap.
+# Versioned no-telemetry releases use the upstream tag, title, notes, and
+# prerelease status. Desktop installers and prebuilt CLI bundles are rebuilt
+# from this fork's matching version. The Homebrew tap tracks these releases.
 #
 # Dispatch manually after reviewing a synced master, or let the daily schedule
 # cut one automatically: the run is a no-op unless the manifests carry a
@@ -53,6 +51,7 @@ jobs:
       head: ${{ steps.resolve.outputs.head }}
       commit: ${{ steps.resolve.outputs.commit }}
       exists: ${{ steps.check.outputs.exists }}
+      upstream_exists: ${{ steps.check.outputs.upstream_exists }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -74,29 +73,36 @@ jobs:
             exit 1
           fi
           version="$cli_version"
-          tag="dsh-v${version}-no-telemetry"
+          tag="dsh-v${version}"
           head=$(git rev-parse HEAD)
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "head=$head" >> "$GITHUB_OUTPUT"
           echo "commit=$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
           echo "Releasing $tag from $head"
-      - name: Check for an existing release tag
+      - name: Check the upstream and fork releases
         id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          if gh release view '${{ steps.resolve.outputs.tag }}' -R deepseek-ai/deepseek-harness >/dev/null 2>&1; then
+            echo "upstream_exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "upstream_exists=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Upstream has not published ${{ steps.resolve.outputs.tag }}; this run builds nothing."
+          fi
           if git ls-remote --exit-code --tags origin '${{ steps.resolve.outputs.tag }}' >/dev/null 2>&1; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
             echo "::notice::Tag ${{ steps.resolve.outputs.tag }} already exists; this run builds nothing."
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
-            echo "Tag ${{ steps.resolve.outputs.tag }} is free; proceeding."
           fi
 
   package:
     name: Package ${{ matrix.target }}
     needs: prepare
-    if: ${{ inputs.dry_run || needs.prepare.outputs.exists != 'true' }}
+    if: ${{ inputs.dry_run || (needs.prepare.outputs.exists != 'true' && needs.prepare.outputs.upstream_exists == 'true') }}
     strategy:
       fail-fast: false
       matrix:
@@ -188,7 +194,7 @@ jobs:
   cli:
     name: Bundle CLI ${{ matrix.target }}
     needs: prepare
-    if: ${{ inputs.dry_run || needs.prepare.outputs.exists != 'true' }}
+    if: ${{ inputs.dry_run || (needs.prepare.outputs.exists != 'true' && needs.prepare.outputs.upstream_exists == 'true') }}
     strategy:
       fail-fast: false
       matrix:
@@ -294,7 +300,7 @@ jobs:
   release:
     name: Publish the versioned release and refresh the tap
     needs: [prepare, package, cli]
-    if: ${{ !cancelled() && (inputs.dry_run || needs.prepare.outputs.exists != 'true') }}
+    if: ${{ !cancelled() && (inputs.dry_run || (needs.prepare.outputs.exists != 'true' && needs.prepare.outputs.upstream_exists == 'true')) }}
     env:
       FORK_TAP_TOKEN: ${{ secrets.FORK_TAP_TOKEN }}
     runs-on: ubuntu-latest
@@ -322,38 +328,26 @@ jobs:
         run: |
           set -euo pipefail
           tag='${{ needs.prepare.outputs.tag }}'
-          version='${{ needs.prepare.outputs.version }}'
           head='${{ needs.prepare.outputs.head }}'
-          git config user.name 'desktop-release-bot'
-          git config user.email 'desktop-release-bot@localhost'
-          git tag "$tag" "$head"
-          git push origin "$tag"
+          upstream=$(gh release view "$tag" -R deepseek-ai/deepseek-harness --json name,body,isPrerelease)
+          release_name=$(jq -r .name <<<"$upstream")
+          prerelease=$(jq -r .isPrerelease <<<"$upstream")
+          jq -j .body <<<"$upstream" > release-notes.md
+          release_args=(--latest=true)
+          if [ "$prerelease" = 'true' ]; then
+            release_args=(--prerelease --latest=false)
+          fi
           if [ ! -e release-assets ] || [ -z "$(find release-assets -type f -print -quit)" ]; then
             echo '::error::No artifacts were produced by any packaging leg.'
             exit 1
           fi
-          # Mirror the upstream changelog for this version underneath the fork
-          # header, so the release reads like its upstream counterpart. Absent
-          # upstream notes (or no network) fall back to the header alone.
-          upstream_notes="$(gh release view "dsh-v${version}" -R deepseek-ai/deepseek-harness --json body --jq .body 2>/dev/null || true)"
-          {
-            echo "No-telemetry fork of DeepSeek Harness $version (upstream-identical version; telemetry removed at the source)."
-            echo ""
-            echo "Install: \`brew tap nentor/tap && brew install --cask deepseek-harness\` (Desktop + CLI) or \`brew install dsh\` (CLI only)."
-            echo "Desktop builds are unsigned: clear quarantine before first launch (see tap caveats)."
-            echo "Intel Mac CLI: use the formula (source build); prebuilt CLI bundles ship mac-arm64 and win-x64."
-            if [ -n "$upstream_notes" ]; then
-              echo ""
-              echo "---"
-              echo ""
-              echo "## Upstream changes in $version"
-              echo ""
-              echo "$upstream_notes"
-            fi
-          } > release-notes.md
+          git config user.name 'desktop-release-bot'
+          git config user.email 'desktop-release-bot@localhost'
+          git tag "$tag" "$head"
+          git push origin "$tag"
           gh release create "$tag" release-assets/* \
-            --latest=true \
-            --title "dsh $version (no telemetry)" \
+            "${release_args[@]}" \
+            --title "$release_name" \
             --notes-file release-notes.md
       - name: Generate the Homebrew cask
         id: cask
