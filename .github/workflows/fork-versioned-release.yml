@@ -2,19 +2,26 @@ name: Fork versioned release
 
 # Versioned no-telemetry releases use the upstream tag, title, notes, and
 # prerelease status. Desktop installers and prebuilt CLI bundles are rebuilt
-# from this fork's matching version. The Homebrew tap tracks these releases.
+# from this fork's matching version. The Homebrew tap tracks the master line
+# only, so maintenance releases built from an upstream tag leave it alone.
 #
-# Dispatch manually after reviewing a synced master, or let the daily schedule
-# cut one automatically: the run is a no-op unless the manifests carry a
-# version with no release tag yet. A dry run builds and validates everything
-# without creating a tag, a release, or touching the tap. To rebuild an
-# existing release, delete its tag and release first, then dispatch again.
+# Two sources feed a release. The master line releases the manifest version
+# once upstream publishes it. Maintenance releases replay the fork's patch
+# series onto the upstream release tag (branch `release/dsh-v<VERSION>`) so
+# every recent upstream tag also exists here, with telemetry removed.
+#
+# Dispatch manually, or let the daily schedule catch up: it releases the
+# master version when upstream has published it, otherwise the newest recent
+# upstream release this fork is still missing. A dry run builds and validates
+# everything without creating a tag, a release, or touching the tap. To
+# rebuild an existing release, delete its tag and release first, then
+# dispatch again.
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Product version to release (default: current manifests)'
+        description: 'Product version to release (default: master version, else the newest missing upstream release)'
         required: false
         default: ''
       dry_run:
@@ -39,6 +46,12 @@ env:
   # Upstream CI marks telemetry-disabled runs the same way; keep the bundled
   # runtime smoke steps quiet regardless of which composition they boot.
   DSH_TELEMETRY_DISABLED: '1'
+  # Fork commits replayed onto an upstream release tag, oldest first. Update
+  # this list whenever the no-telemetry change grows a commit.
+  FORK_PATCH_COMMITS: '6f98deb6d7 96066b75e6 785de4f687'
+  # Maintenance releases published before this date predate the fork and are
+  # not backfilled.
+  FORK_RELEASE_SINCE: '2026-10-24'
 
 jobs:
   prepare:
@@ -49,6 +62,8 @@ jobs:
       version: ${{ steps.resolve.outputs.version }}
       tag: ${{ steps.resolve.outputs.tag }}
       head: ${{ steps.resolve.outputs.head }}
+      ref: ${{ steps.resolve.outputs.ref }}
+      tap: ${{ steps.resolve.outputs.tap }}
       commit: ${{ steps.resolve.outputs.commit }}
       exists: ${{ steps.check.outputs.exists }}
       upstream_exists: ${{ steps.check.outputs.upstream_exists }}
@@ -58,6 +73,8 @@ jobs:
           fetch-depth: 0
       - name: Resolve the version and tag
         id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           requested="${{ inputs.version }}"
@@ -68,18 +85,66 @@ jobs:
             echo "::error::Manifest versions disagree: cli=$cli_version desktop=$desktop_version root=$root_version"
             exit 1
           fi
-          if [ -n "$requested" ] && [ "$requested" != "$cli_version" ]; then
-            echo "::error::Requested version $requested does not match manifests ($cli_version)"
-            exit 1
+          released() { git ls-remote --exit-code --tags origin "dsh-v$1" >/dev/null 2>&1; }
+          # With no request, release the master version first; catch up on
+          # maintenance tags only once that one is out.
+          if [ -z "$requested" ] && ! released "$cli_version"; then
+            requested="$cli_version"
           fi
-          version="$cli_version"
+          if [ -z "$requested" ]; then
+            candidates=$(gh release list -R deepseek-ai/deepseek-harness --limit 100 \
+              --json tagName,publishedAt \
+              --jq ".[] | select(.publishedAt >= \"$FORK_RELEASE_SINCE\") | .tagName | sub(\"^dsh-v\"; \"\")")
+            for candidate in $candidates; do
+              if ! released "$candidate"; then
+                requested="$candidate"
+                break
+              fi
+            done
+          fi
+          if [ -z "$requested" ]; then
+            # Nothing to build: name the released master version so the jobs skip.
+            requested="$cli_version"
+            echo "::notice::Every recent upstream release already exists on this fork."
+          fi
+          version="$requested"
           tag="dsh-v${version}"
-          head=$(git rev-parse HEAD)
+          tap=true
+          ref=master
+          if [ "$version" = "$cli_version" ]; then
+            head=$(git rev-parse HEAD)
+          else
+            # Maintenance release: replay the fork patch series onto the tag.
+            tap=false
+            ref="release/${tag}"
+            git remote add upstream https://github.com/deepseek-ai/deepseek-harness.git 2>/dev/null || true
+            git fetch --no-tags upstream "refs/tags/${tag}:refs/tags/${tag}"
+            if git fetch origin "refs/heads/${ref}:refs/remotes/origin/${ref}" 2>/dev/null; then
+              git checkout -q -B "$ref" "refs/remotes/origin/${ref}"
+            else
+              git checkout -q -B "$ref" "refs/tags/${tag}"
+              for commit in $FORK_PATCH_COMMITS; do
+                if ! git cherry-pick -x "$commit"; then
+                  echo "::error::The fork patches do not apply to ${tag}. Resolve them locally, push ${ref}, and re-run."
+                  exit 1
+                fi
+              done
+              prepared_version=$(jq -r .version package.json)
+              if [ "$prepared_version" != "$version" ]; then
+                echo "::error::Prepared tree reports version ${prepared_version}, expected ${version}."
+                exit 1
+              fi
+              git push origin "$ref"
+            fi
+            head=$(git rev-parse HEAD)
+          fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "head=$head" >> "$GITHUB_OUTPUT"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "tap=$tap" >> "$GITHUB_OUTPUT"
           echo "commit=$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
-          echo "Releasing $tag from $head"
+          echo "Releasing $tag from $head ($ref)"
       - name: Check the upstream and fork releases
         id: check
         env:
@@ -134,7 +199,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.prepare.outputs.head }}
+          ref: ${{ needs.prepare.outputs.ref }}
       - uses: pnpm/action-setup@v5.0.0
       - uses: actions/setup-node@v4
         with:
@@ -214,7 +279,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.prepare.outputs.head }}
+          ref: ${{ needs.prepare.outputs.ref }}
           fetch-depth: 0
       - uses: pnpm/action-setup@v5.0.0
       - uses: actions/setup-node@v4
@@ -308,7 +373,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.prepare.outputs.head }}
+          ref: ${{ needs.prepare.outputs.ref }}
           fetch-depth: 0
       - uses: actions/download-artifact@v4
         with:
@@ -369,7 +434,7 @@ jobs:
             --notes-file release-notes.md
       - name: Generate the Homebrew cask
         id: cask
-        if: ${{ !inputs.dry_run }}
+        if: ${{ !inputs.dry_run && needs.prepare.outputs.tap == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -412,7 +477,7 @@ jobs:
           cat cask.rb
       - name: Generate the Homebrew formula
         id: formula
-        if: ${{ !inputs.dry_run }}
+        if: ${{ !inputs.dry_run && needs.prepare.outputs.tap == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -529,7 +594,7 @@ jobs:
           } > dsh.rb
           cat dsh.rb
       - name: Push the cask and formula to the tap
-        if: ${{ !inputs.dry_run && env.FORK_TAP_TOKEN != '' }}
+        if: ${{ !inputs.dry_run && needs.prepare.outputs.tap == 'true' && env.FORK_TAP_TOKEN != '' }}
         run: |
           git clone --depth 1 "https://x-access-token:${FORK_TAP_TOKEN}@github.com/nentor/homebrew-tap.git" tap
           mkdir -p tap/Casks tap/Formula
@@ -540,7 +605,7 @@ jobs:
           git -C tap add Casks/deepseek-harness.rb Formula/dsh.rb
           git -C tap diff --cached --quiet || { git -C tap commit -m "deepseek-harness ${{ needs.prepare.outputs.version }}-no-telemetry"; git -C tap push; }
       - name: Require the tap token for a real release
-        if: ${{ !inputs.dry_run && env.FORK_TAP_TOKEN == '' }}
+        if: ${{ !inputs.dry_run && needs.prepare.outputs.tap == 'true' && env.FORK_TAP_TOKEN == '' }}
         run: |
           echo '::error::FORK_TAP_TOKEN is not configured; the release was published but the tap was not updated.'
           exit 1
