@@ -329,10 +329,28 @@ jobs:
           set -euo pipefail
           tag='${{ needs.prepare.outputs.tag }}'
           head='${{ needs.prepare.outputs.head }}'
-          upstream=$(gh release view "$tag" -R deepseek-ai/deepseek-harness --json name,body,isPrerelease)
-          release_name=$(jq -r .name <<<"$upstream")
+          version='${{ needs.prepare.outputs.version }}'
+          upstream=$(gh release view "$tag" -R deepseek-ai/deepseek-harness --json body,isPrerelease)
           prerelease=$(jq -r .isPrerelease <<<"$upstream")
-          jq -j .body <<<"$upstream" > release-notes.md
+          # Mirror the upstream changelog for this version underneath the fork
+          # header, so the release reads like its upstream counterpart while
+          # still stating what this fork changes.
+          upstream_notes=$(jq -j .body <<<"$upstream")
+          {
+            echo "No-telemetry fork of DeepSeek Harness $version (upstream-identical version; telemetry removed at the source)."
+            echo ""
+            echo "Install: \`brew tap nentor/tap && brew install --cask deepseek-harness\` (Desktop + CLI) or \`brew install dsh\` (CLI only)."
+            echo "Desktop builds are unsigned: clear quarantine before first launch (see tap caveats)."
+            echo "Intel Mac CLI: use the formula (source build); prebuilt CLI bundles ship mac-arm64 and win-x64."
+            if [ -n "$upstream_notes" ]; then
+              echo ""
+              echo "---"
+              echo ""
+              echo "## Upstream changes in $version"
+              echo ""
+              echo "$upstream_notes"
+            fi
+          } > release-notes.md
           release_args=(--latest=true)
           if [ "$prerelease" = 'true' ]; then
             release_args=(--prerelease --latest=false)
@@ -347,7 +365,7 @@ jobs:
           git push origin "$tag"
           gh release create "$tag" release-assets/* \
             "${release_args[@]}" \
-            --title "$release_name" \
+            --title "v${version}-no-telemetry" \
             --notes-file release-notes.md
       - name: Generate the Homebrew cask
         id: cask
