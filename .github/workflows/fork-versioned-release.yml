@@ -227,7 +227,18 @@ jobs:
           DSH_DESKTOP_MANDATORY_UPDATE_TEST_ORIGIN=https://updates.invalid
           DSH_DESKTOP_MANDATORY_UPDATE_CONFIG={"allowedAuthOrigins":["https://updates.invalid"]}'
           printf '%s\n' "$settings" > .env.macos
-          printf '%s\n' "$settings" 'DSH_DESKTOP_WINDOWS_COMPRESSION_LEVEL=3' > .env.windows
+          # The compression knob postdates older upstream tags, and the
+          # packaging environment rejects settings the tree does not know.
+          windows_settings=''
+          if grep -q DSH_DESKTOP_WINDOWS_COMPRESSION_LEVEL \
+            scripts/desktop-package-environment.mjs 2>/dev/null; then
+            windows_settings='DSH_DESKTOP_WINDOWS_COMPRESSION_LEVEL=3'
+          fi
+          if [ -n "$windows_settings" ]; then
+            printf '%s\n' "$settings" "$windows_settings" > .env.windows
+          else
+            printf '%s\n' "$settings" > .env.windows
+          fi
       - name: Configure the pnpm store cache
         id: pnpm-store
         shell: bash
@@ -318,6 +329,15 @@ jobs:
           pnpm run release:pack --family vendor --out dist/npm-vendor
           pnpm --dir native/system run build:ts
           pnpm --dir native/system/packages/entry pack --pack-destination "$PWD/dist/npm-landlock"
+      - name: Provide the fork's consumer manifest helper
+        # The helper is fork-owned and postdates older upstream tags, so a
+        # maintenance tree may not carry it; take master's copy either way.
+        working-directory: ${{ matrix.workspace-root }}
+        shell: bash
+        run: |
+          git fetch --depth=1 origin master
+          git show FETCH_HEAD:scripts/release/write-consumer-manifest.mjs \
+            > scripts/release/write-consumer-manifest.mjs
       - name: Install the portable CLI tree from local tarballs
         working-directory: ${{ matrix.workspace-root }}
         shell: bash
@@ -385,6 +405,26 @@ jobs:
           pattern: cli-*
           merge-multiple: true
           path: release-assets
+      - name: Require every packaging leg's artifact
+        # A failed leg must stop the release before the tag exists, so the
+        # version can be rebuilt by re-dispatching this workflow.
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for asset in \
+            "deepseek-harness-${VERSION}-mac-arm64-unsigned.dmg" \
+            "deepseek-harness-${VERSION}-mac-x64-unsigned.dmg" \
+            "deepseek-harness-${VERSION}-win-x64-unsigned.exe" \
+            "dsh-${VERSION}-mac-arm64.tar.gz" \
+            "dsh-${VERSION}-win-x64.tar.gz"; do
+            if [ ! -f "release-assets/$asset" ]; then
+              echo "::error::Missing $asset; its packaging leg did not finish."
+              missing=1
+            fi
+          done
+          exit "$missing"
       - name: Tag and publish the stable release
         id: publish
         if: ${{ !inputs.dry_run }}
