@@ -173,13 +173,13 @@ jobs:
       matrix:
         include:
           - target: mac-arm64
-            os: macos-14
+            os: macos-15
             script: package:mac:arm64:unsigned
             workspace-root: .
             asset-path: apps/desktop/.desktop-build/targets/mac-arm64/unsigned-artifacts/*.dmg
             asset-filter: dmg
           - target: mac-x64
-            os: macos-14
+            os: macos-15
             script: package:mac:x64:unsigned
             workspace-root: .
             asset-path: apps/desktop/.desktop-build/targets/mac-x64/unsigned-artifacts/*.dmg
@@ -267,7 +267,7 @@ jobs:
           # Plain-node bundles are ABI-bound to their build host: Intel Macs
           # stay on the source-build formula until an x64 bundling leg lands.
           - target: mac-arm64
-            os: macos-14
+            os: macos-15
             workspace-root: .
           - target: win-x64
             os: windows-latest
