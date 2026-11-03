@@ -395,6 +395,11 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.ref }}
           fetch-depth: 0
+          # Creating the release tag is a new ref, and GitHub compares its tree
+          # against the default branch. When the built commit and the current
+          # master differ in .github/workflows, GITHUB_TOKEN is refused without
+          # the Workflows permission, so push the tag with the fork token.
+          token: ${{ secrets.FORK_TAP_TOKEN || github.token }}
       - uses: actions/download-artifact@v4
         with:
           pattern: desktop-*
@@ -467,7 +472,10 @@ jobs:
           git config user.name 'desktop-release-bot'
           git config user.email 'desktop-release-bot@localhost'
           git tag "$tag" "$head"
-          git push origin "$tag"
+          if ! git push origin "$tag"; then
+            echo '::error::Tag push rejected; the release token needs Contents and Workflows write when the tag tree differs from master in .github/workflows.'
+            exit 1
+          fi
           gh release create "$tag" release-assets/* \
             "${release_args[@]}" \
             --title "v${version}-no-telemetry" \
