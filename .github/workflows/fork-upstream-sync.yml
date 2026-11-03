@@ -2,6 +2,11 @@ name: Fork Upstream Sync
 
 # Merge upstream master into this fork while retaining the no-telemetry patches.
 # Versioned releases are built separately by fork-versioned-release.yml.
+#
+# GITHUB_TOKEN may never push .github/workflows, so a merge that carries
+# upstream workflow edits is pushed without them and this fork keeps its own CI
+# definitions. Set FORK_SYNC_TOKEN (Contents and Workflows write) to mirror
+# upstream's workflow files as well.
 
 on:
   schedule:
@@ -64,9 +69,19 @@ jobs:
             exit 0
           fi
           echo "$push_output"
-          if grep -q 'without `workflows` permission' <<<"$push_output"; then
-            echo '::error::Upstream edited .github/workflows. Set FORK_SYNC_TOKEN to a token with Contents and Workflows write access, then re-run.'
-          else
+          if ! grep -q 'without `workflows` permission' <<<"$push_output"; then
             echo '::error::Push rejected; re-run once the remote state is reconciled.'
+            exit 1
           fi
-          exit 1
+          # Upstream edited .github/workflows, which GITHUB_TOKEN may not push.
+          # Keep this fork's CI definitions, drop upstream's edits, and push the
+          # merge; the release workflows never use upstream's CI files.
+          rm -rf .github/workflows
+          git checkout HEAD^1 -- .github/workflows
+          git add -A .github/workflows
+          git commit --quiet --amend --no-edit
+          if ! git push origin "master:master"; then
+            echo '::error::Push rejected after dropping upstream workflow edits.'
+            exit 1
+          fi
+          echo '::warning::Synced the fork master without upstream workflow edits; set FORK_SYNC_TOKEN to mirror them.'
