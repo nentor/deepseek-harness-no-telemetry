@@ -5,8 +5,8 @@ name: Fork Upstream Sync
 #
 # GITHUB_TOKEN may never push .github/workflows, so a merge that carries
 # upstream workflow edits is pushed without them and this fork keeps its own CI
-# definitions. Set FORK_SYNC_TOKEN (Contents and Workflows write) to mirror
-# upstream's workflow files as well.
+# definitions. A token with the Workflows permission (FORK_SYNC_TOKEN, or the
+# existing FORK_TAP_TOKEN when it also covers this repository) mirrors them.
 
 on:
   schedule:
@@ -35,9 +35,9 @@ jobs:
         with:
           fetch-depth: 0
           # Upstream edits .github/workflows regularly, and GITHUB_TOKEN may
-          # never push workflow files. FORK_SYNC_TOKEN is a repository token
-          # with Contents and Workflows write access.
-          token: ${{ secrets.FORK_SYNC_TOKEN || github.token }}
+          # never push workflow files. Either secret needs Contents write here
+          # and Workflows write to carry upstream's CI definitions.
+          token: ${{ secrets.FORK_SYNC_TOKEN || secrets.FORK_TAP_TOKEN || github.token }}
       - name: Configure a generic git identity for the automated merge
         run: |
           git config user.name 'desktop-release-bot'
@@ -84,4 +84,4 @@ jobs:
             echo '::error::Push rejected after dropping upstream workflow edits.'
             exit 1
           fi
-          echo '::warning::Synced the fork master without upstream workflow edits; set FORK_SYNC_TOKEN to mirror them.'
+          echo '::warning::Synced the fork master without upstream workflow edits; the sync token lacks the Workflows permission.'
