@@ -44,8 +44,19 @@ jobs:
           git config user.email 'desktop-release-bot@localhost'
       - name: Fetch upstream
         run: |
+          set -euo pipefail
           git remote add upstream https://github.com/deepseek-ai/deepseek-harness.git
-          git fetch --no-tags upstream master
+          git fetch --no-tags --force upstream '+refs/heads/master:refs/remotes/upstream/master'
+          # A ref left behind the advertised head makes the merge a no-op that
+          # still reports success, so the fork silently stops tracking upstream.
+          advertised=$(git ls-remote upstream refs/heads/master | cut -f1)
+          if [ "$(git rev-parse upstream/master)" != "$advertised" ]; then
+            git fetch --no-tags --force upstream "+${advertised}:refs/remotes/upstream/master"
+          fi
+          if [ "$(git rev-parse upstream/master)" != "$advertised" ]; then
+            echo "::error::Fetched $(git rev-parse upstream/master) while upstream advertises $advertised."
+            exit 1
+          fi
       - name: Merge upstream master
         id: merge
         run: |

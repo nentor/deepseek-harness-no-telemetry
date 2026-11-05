@@ -36,6 +36,8 @@ on:
 
 permissions:
   contents: write
+  # The resolver dispatches the upstream sync when master is behind.
+  actions: write
 
 concurrency:
   group: fork-versioned-release
@@ -77,6 +79,35 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          # The master line carries the newest version and the no-telemetry
+          # patches. A stale master would push the resolver into a maintenance
+          # build whose patches may no longer apply, so sync first and continue
+          # from the merged master.
+          git remote add upstream https://github.com/deepseek-ai/deepseek-harness.git
+          git fetch --no-tags --force upstream '+refs/heads/master:refs/remotes/upstream/master'
+          if [ "$(git rev-list --count HEAD..upstream/master)" -gt 0 ]; then
+            echo '::notice::Fork master is behind upstream; running the upstream sync first.'
+            previous_sync=$(gh run list -R "$GITHUB_REPOSITORY" --workflow fork-upstream-sync.yml \
+              --event workflow_dispatch --limit 1 --json databaseId --jq '.[0].databaseId // 0')
+            gh workflow run fork-upstream-sync.yml -R "$GITHUB_REPOSITORY" --ref master
+            sync_run=$previous_sync
+            for _ in $(seq 1 60); do
+              sync_run=$(gh run list -R "$GITHUB_REPOSITORY" --workflow fork-upstream-sync.yml \
+                --event workflow_dispatch --limit 1 --json databaseId --jq '.[0].databaseId // 0')
+              [ "$sync_run" != "$previous_sync" ] && break
+              sleep 5
+            done
+            if [ "$sync_run" = "$previous_sync" ]; then
+              echo '::error::The upstream sync did not start.'
+              exit 1
+            fi
+            if ! gh run watch "$sync_run" -R "$GITHUB_REPOSITORY" --exit-status; then
+              echo "::error::The upstream sync failed; re-run it before releasing."
+              exit 1
+            fi
+            git fetch origin master
+            git merge --ff-only origin/master
+          fi
           requested="${{ inputs.version }}"
           cli_version=$(jq -r .version apps/cli/package.json)
           desktop_version=$(jq -r .version apps/desktop/package.json)
