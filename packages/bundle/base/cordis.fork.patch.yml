@@ -1,0 +1,13 @@
+# Fork-owned layer: this build mounts no telemetry capture or export path.
+#
+# Keep fork behavior in this file rather than editing ../cordis.patch.yml, so
+# upstream merges stay clean. Each entry disables a row by id and restates no
+# upstream configuration, so upstream edits to that row need no follow-up here.
+# A row that never mounts cannot capture, send, or be re-enabled from settings;
+# the launcher's DSH_TELEMETRY_DISABLED switch still applies above user and
+# overlay patches.
+- id: session-log-deepseek
+  disabled: true
+
+- id: session-telemetry-otel
+  disabled: true

@@ -18,11 +18,12 @@ describe('dsh-base bundle', () => {
       readFileSync(resolve(root, 'package.json'), 'utf8'),
     ) as {
       dependencies?: Record<string, string>
-      dsh?: { bundle?: { patch?: string } }
+      dsh?: { bundle?: { patch?: string | string[] } }
     }
-    expect(manifest.dsh?.bundle?.patch).toBe('./cordis.patch.yml')
+    expect(manifest.dsh?.bundle?.patch).toEqual(['./cordis.patch.yml', './cordis.fork.patch.yml'])
+    const [patchFile] = manifest.dsh!.bundle!.patch as string[]
     const parsed = yaml.load(
-      readFileSync(resolve(root, manifest.dsh!.bundle!.patch!), 'utf8'),
+      readFileSync(resolve(root, patchFile!), 'utf8'),
       { schema: entryListSchema },
     )
     expect(Array.isArray(parsed)).toBe(true)

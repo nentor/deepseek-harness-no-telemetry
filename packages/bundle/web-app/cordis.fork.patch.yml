@@ -1,0 +1,20 @@
+# Fork-owned layer: no product telemetry, plus the release-office budget below.
+#
+# Keep fork behavior in this file rather than editing ../cordis.patch.yml, so
+# upstream merges stay clean. The telemetry entries disable rows by id and
+# restate no upstream configuration; a row that never mounts cannot capture,
+# send, or be re-enabled from settings.
+- id: desktop-product-telemetry
+  disabled: true
+
+- id: product-analytics
+  disabled: true
+
+# Unsigned release legs build the mac-x64 runtime on ARM macOS and run its x64
+# LibreOffice helper under Rosetta, where a cold first conversion takes
+# minutes; keep one bounded per-attempt budget above that. The patch replaces
+# the whole config, so it restates the upstream output directory.
+- id: office-kit
+  config:
+    timeoutMs: 240000
+    outputDirectory: !!js dshHomePath('office-kit', 'outputs')

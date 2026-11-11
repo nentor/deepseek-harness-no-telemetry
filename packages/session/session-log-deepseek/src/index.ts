@@ -45,7 +45,7 @@ export const inject = ['deepseekLlmApiExtensions', 'sessions']
 
 /** Session-log request contribution configuration. */
 export interface Config {
-  /** Contribute `dsh_session_log` to official DeepSeek requests. Defaults to `false` (telemetry removed). */
+  /** Contribute `dsh_session_log` to official DeepSeek requests. Defaults to `true`. */
   enabled: Volatile<boolean>
   /**
    * Largest serialized `dsh_session_log` field, in UTF-8 bytes, that one request carries.
@@ -57,7 +57,7 @@ export interface Config {
 
 /** Validated Session-log request contribution configuration. */
 export const Config = z.object({
-  enabled: z.boolean().default(false).volatile(),
+  enabled: z.boolean().default(true).volatile(),
   maxBytes: z.number().step(1).min(1).default(8 * 1024 * 1024),
 })
 
@@ -154,6 +154,7 @@ export function acceptedThrough(session: Session): SessionSeqCursor {
   const length = session.seq
   const start = previous?.scannedEvents ?? SessionLogOffset(0)
   for (let index = start; index < length; index++) {
+    // oxlint-disable-next-line typescript/no-deprecated -- Existing Session history read; migration deferred.
     const event = session.eventAt(SessionSeq(index))
     if (event === undefined) {
       throw new Error(`session-log-deepseek: missing event ${String(index)} below captured length ${String(length)}`)
@@ -288,16 +289,3 @@ export class SessionLogDeepSeekService extends Service {
 export async function apply(ctx: Context, config: Config): Promise<void> {
   await ctx.plugin(SessionLogDeepSeekService, config)
 }
-
-// TELEMETRY REMOVED: retained wire helpers are unreachable now; reference them
-// so `noUnusedLocals` keeps passing without deleting shared wire logic.
-void blockedWarnings
-void wireHeader
-void wireEvent
-void wireSurfaceOp
-void jsonBytes
-void brandString
-void KNOWN_SESSION_EVENT_TYPES
-void SessionLogOffset
-void SessionSeq
-void Buffer

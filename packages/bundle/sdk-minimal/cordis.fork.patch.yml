@@ -1,0 +1,7 @@
+# Fork-owned layer: the standalone minimal SDK profile mounts no telemetry.
+#
+# Keep fork behavior in this file rather than editing ../cordis.patch.yml, so
+# upstream merges stay clean. The entry disables the row by id and restates no
+# upstream configuration; a row that never mounts cannot capture or send.
+- id: session-log-deepseek
+  disabled: true

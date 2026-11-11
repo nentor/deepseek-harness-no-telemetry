@@ -72,6 +72,10 @@ import { DesktopQuitConfirmation } from './quit-confirmation.ts'
 import { DesktopTray } from './tray.ts'
 import { DesktopBackgroundNotice } from './background-notice.ts'
 
+// No-telemetry build: opt this process, and every Host it launches, out of all
+// outbound capture and attribution before any environment snapshot is taken.
+process.env.DSH_TELEMETRY_DISABLED = '1'
+
 let focusPrimaryWindow = (): void => {}
 let stopForRecovery = async (): Promise<void> => { await stopOperationReports() }
 let shuttingDown = false

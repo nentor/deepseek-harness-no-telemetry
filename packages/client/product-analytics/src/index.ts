@@ -9,7 +9,7 @@ import type {} from '@deepseek-ai/cordis-plugin-loader'
 import type {} from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-compaction/types'
 import type { ProductEvent } from './events.ts'
-import type { EnvironmentAttributes } from './environment.ts'
+import { collectEnvironment, type EnvironmentAttributes } from './environment.ts'
 
 /** Application-owned collection policy; no user settings surface. */
 export interface Config {
@@ -33,7 +33,7 @@ declare module '@deepseek-ai/cordis' {
 export default class ProductAnalytics extends TypertRemoteService {
   static inject = ['deepseekAccount', 'productTelemetry']
   static Config = z.object({
-    enabled: z.boolean().default(false).volatile(), appVersion: z.string(),
+    enabled: z.boolean().default(true).volatile(), appVersion: z.string(),
     environmentQueryTimeoutMillis: z.number().step(1).min(1).max(2_147_483_647).default(5000),
     environmentQueryMaxOutputBytes: z.number().step(1).min(1).max(2_147_483_647).default(16384),
   })
@@ -61,15 +61,10 @@ export default class ProductAnalytics extends TypertRemoteService {
 
   /**
    * Read the collection policy.
-   * TELEMETRY REMOVED: always reports disabled in this build.
-   * @returns always `false`.
+   * @returns whether this Host currently accepts Desktop analytics.
    */
   @Remote
-  enabled(): boolean {
-    void this.active
-    void this.config
-    return false
-  }
+  enabled(): boolean { return this.active && this.config.enabled.get() }
 
   /**
    * Stream the effective policy initially and after live configuration edits.
@@ -95,13 +90,41 @@ export default class ProductAnalytics extends TypertRemoteService {
   }
 
   /**
-   * Submit selected Desktop fields; missing identity is omitted and never generated.
-   * TELEMETRY REMOVED: drops the event; no network traffic leaves this build.
-   * @param _event - typed product event (discarded).
-   * @returns immediately without submission.
+   * Submit selected Desktop fields with cached static environment and fresh identity.
+   * The first intake waits for bounded environment queries; concurrent intakes share them.
+   * Missing identity is omitted; failed environment fields carry fixed reasons.
+   * @param event - typed product event without message contents or credentials.
+   * @returns after local submission; no delivery or warehouse acknowledgement.
    */
   @Remote
-  async report(_event: ProductEvent): Promise<void> {
-    return
+  async report(event: ProductEvent): Promise<void> {
+    if (!this.enabled()) return
+    try {
+      this.environment ??= collectEnvironment({
+        timeoutMillis: this.config.environmentQueryTimeoutMillis,
+        maxOutputBytes: this.config.environmentQueryMaxOutputBytes,
+        signal: this.environmentLifetime.signal,
+      })
+      const [environment, identity] = await Promise.all([
+        this.environment, this.ctx.deepseekAccount.getDeviceIdentity().catch(() => undefined),
+      ])
+      if (!this.enabled()) return
+      const { missing_fields: missingFields, ...metadata } = environment
+      const missing = Object.entries(missingFields).sort(([a], [b]) => a.localeCompare(b))
+        .map(([field, reason]) => `${field}=${reason}`).join(',')
+      this.ctx.productTelemetry.emit({
+        ...event, body: event.eventName,
+        attributes: {
+          ...event.attributes,
+          ...metadata,
+          ...missing === '' ? {} : { missing_fields: missing },
+          ...identity?.deviceId === undefined ? {} : { device_id: identity.deviceId },
+          ...identity?.userId === undefined ? {} : { user_id: identity.userId },
+          ...this.config.appVersion === undefined ? {} : { app_version: this.config.appVersion },
+        },
+      })
+    } catch (error) {
+      this.ctx.logger.warn('Product analytics submission failed', error)
+    }
   }
 }

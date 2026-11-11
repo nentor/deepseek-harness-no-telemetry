@@ -36,8 +36,7 @@
 - insert:
     - id: desktop-product-telemetry
       name: '@deepseek-ai/dsh-host-product-telemetry-otel'
-      # TELEMETRY REMOVED (local no-telemetry build): never send product analytics.
-      disabled: true
+      disabled: !!js "ctx.get('profileContext')?.name !== 'desktop'"
       config:
         scheduledDelayMillis: 30000
         timeoutMillis: 15000
@@ -45,14 +44,13 @@
         shutdownTimeoutMillis: 2000
         serviceName: deepseek-harness-desktop
         serviceVersion: !!js process.env.DSH_CLIENT_VERSION
-        endpoint: http://127.0.0.1:0/v1/logs
+        endpoint: !!js process.env.DSH_PRODUCT_ANALYTICS_OTLP_URL
 
     - id: product-analytics
       name: '@deepseek-ai/dsh-client-product-analytics'
-      # TELEMETRY REMOVED (local no-telemetry build): collection stays off.
-      disabled: true
+      disabled: !!js "ctx.get('profileContext')?.name !== 'desktop'"
       config:
-        enabled: false
+        enabled: true
         appVersion: !!js process.env.DSH_CLIENT_VERSION
 
     # Host-owned authorization sampled at Agent creation. The Plugins page
@@ -293,10 +291,6 @@
     - id: office-kit
       name: '@deepseek-ai/dsh-office-kit'
       config:
-        # Unsigned release legs build the mac-x64 runtime on ARM macOS and run its
-        # x64 LibreOffice helper under Rosetta, where a cold first conversion takes
-        # minutes; keep one bounded per-attempt budget above that.
-        timeoutMs: 240000
         outputDirectory: !!js dshHomePath('office-kit', 'outputs')
 
     # Every profile uses the packaged Office skills. Desktop supplies their Python
