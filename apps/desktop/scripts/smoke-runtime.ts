@@ -13,6 +13,10 @@ import { createPluginProfile } from '../src/project-manager.ts'
 import type { DesktopRuntimeDescriptor } from '../src/runtime-tree.ts'
 
 const OFFICE_SKILLS = ['office', 'office-docx', 'office-pptx', 'office-xlsx']
+// The x64 Rosetta legs run each Office operation serially under a 240s plugin
+// budget, so the smoke client must outlast the whole sequence, not one step.
+const OFFICE_CONVERSION_TIMEOUT_MS = 240_000
+const OFFICE_OPERATIONS_TIMEOUT_MS = 900_000
 
 /**
  * Require each bundled Office skill to be listed and loaded with a nonempty body.
@@ -208,7 +212,7 @@ export function apply(ctx) {
     console.log('desktop runtime: packaged Office skills listed and loaded')
     for (const { extension } of inputs) {
       const converted = await fetch(new URL(`/desktop-smoke-office/${extension}`, ready.url), {
-        headers: { cookie }, signal: AbortSignal.timeout(120_000),
+        headers: { cookie }, signal: AbortSignal.timeout(OFFICE_CONVERSION_TIMEOUT_MS),
       })
       if (!converted.ok) throw new Error(`desktop runtime: ${extension} conversion failed: ${await converted.text()}`)
       const pdf = Buffer.from(await converted.arrayBuffer())
@@ -219,7 +223,7 @@ export function apply(ctx) {
     }
     for (const { extension } of inputs) {
       const operations = await fetch(new URL(`/desktop-smoke-office-operations/${extension}`, ready.url), {
-        headers: { cookie }, signal: AbortSignal.timeout(240_000),
+        headers: { cookie }, signal: AbortSignal.timeout(OFFICE_OPERATIONS_TIMEOUT_MS),
       })
       if (!operations.ok) throw new Error(`desktop runtime: ${extension} Office operations failed: ${await operations.text()}`)
       const result = await operations.json() as { images: string[]; converted: string; recalculated: string | null }
