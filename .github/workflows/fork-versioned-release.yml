@@ -1,0 +1,690 @@
+name: Fork versioned release
+
+# Versioned no-telemetry releases use the upstream tag, title, notes, and
+# prerelease status. Desktop installers and prebuilt CLI bundles are rebuilt
+# from this fork's matching version. The Homebrew tap tracks the master line
+# only, so maintenance releases built from an upstream tag leave it alone.
+#
+# Two sources feed a release. The master line releases the manifest version
+# once upstream publishes it. Maintenance releases replay the fork's patch
+# series onto the upstream release tag (branch `release/dsh-v<VERSION>`) so
+# every recent upstream tag also exists here, with telemetry removed.
+#
+# Dispatch manually, or let the daily schedule catch up: it releases the
+# master version when upstream has published it, otherwise the newest recent
+# upstream release this fork is still missing. A dry run builds and validates
+# everything without creating a tag, a release, or touching the tap. To
+# rebuild an existing release, delete its tag and release first, then
+# dispatch again.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Product version to release (default: master version, else the newest missing upstream release)'
+        required: false
+        default: ''
+      dry_run:
+        description: 'Build and validate only'
+        required: false
+        type: boolean
+        default: false
+  schedule:
+    # After the 05:00 upstream sync; exits early when the current version is
+    # already released.
+    - cron: '0 6 * * *'
+
+permissions:
+  contents: write
+  # The resolver dispatches the upstream sync when master is behind.
+  actions: write
+
+concurrency:
+  group: fork-versioned-release
+  cancel-in-progress: false
+
+env:
+  PRIMARY_NODE_VERSION: '24'
+  # Upstream CI marks telemetry-disabled runs the same way; keep the bundled
+  # runtime smoke steps quiet regardless of which composition they boot.
+  DSH_TELEMETRY_DISABLED: '1'
+  # Fork commits replayed onto an upstream release tag, oldest first. Update
+  # this list whenever the no-telemetry change grows a commit.
+  FORK_PATCH_COMMITS: '6f98deb6d7 96066b75e6 785de4f687'
+  # Maintenance releases published before this date predate the fork and are
+  # not backfilled.
+  FORK_RELEASE_SINCE: '2026-10-24'
+
+jobs:
+  prepare:
+    name: Resolve the versioned release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      tag: ${{ steps.resolve.outputs.tag }}
+      head: ${{ steps.resolve.outputs.head }}
+      ref: ${{ steps.resolve.outputs.ref }}
+      tap: ${{ steps.resolve.outputs.tap }}
+      commit: ${{ steps.resolve.outputs.commit }}
+      exists: ${{ steps.check.outputs.exists }}
+      upstream_exists: ${{ steps.check.outputs.upstream_exists }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Resolve the version and tag
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # The master line carries the newest version and the no-telemetry
+          # patches. A stale master would push the resolver into a maintenance
+          # build whose patches may no longer apply, so sync first and continue
+          # from the merged master.
+          git remote add upstream https://github.com/deepseek-ai/deepseek-harness.git
+          git fetch --no-tags --force upstream '+refs/heads/master:refs/remotes/upstream/master'
+          if [ "$(git rev-list --count HEAD..upstream/master)" -gt 0 ]; then
+            echo '::notice::Fork master is behind upstream; running the upstream sync first.'
+            previous_sync=$(gh run list -R "$GITHUB_REPOSITORY" --workflow fork-upstream-sync.yml \
+              --event workflow_dispatch --limit 1 --json databaseId --jq '.[0].databaseId // 0')
+            gh workflow run fork-upstream-sync.yml -R "$GITHUB_REPOSITORY" --ref master
+            sync_run=$previous_sync
+            for _ in $(seq 1 60); do
+              sync_run=$(gh run list -R "$GITHUB_REPOSITORY" --workflow fork-upstream-sync.yml \
+                --event workflow_dispatch --limit 1 --json databaseId --jq '.[0].databaseId // 0')
+              [ "$sync_run" != "$previous_sync" ] && break
+              sleep 5
+            done
+            if [ "$sync_run" = "$previous_sync" ]; then
+              echo '::error::The upstream sync did not start.'
+              exit 1
+            fi
+            if ! gh run watch "$sync_run" -R "$GITHUB_REPOSITORY" --exit-status; then
+              echo "::error::The upstream sync failed; re-run it before releasing."
+              exit 1
+            fi
+            git fetch origin master
+            git merge --ff-only origin/master
+          fi
+          requested="${{ inputs.version }}"
+          cli_version=$(jq -r .version apps/cli/package.json)
+          desktop_version=$(jq -r .version apps/desktop/package.json)
+          root_version=$(jq -r .version package.json)
+          if [ "$cli_version" != "$desktop_version" ] || [ "$cli_version" != "$root_version" ]; then
+            echo "::error::Manifest versions disagree: cli=$cli_version desktop=$desktop_version root=$root_version"
+            exit 1
+          fi
+          released() { git ls-remote --exit-code --tags origin "dsh-v$1" >/dev/null 2>&1; }
+          # With no request, release the master version first; catch up on
+          # maintenance tags only once that one is out.
+          if [ -z "$requested" ] && ! released "$cli_version"; then
+            requested="$cli_version"
+          fi
+          if [ -z "$requested" ]; then
+            candidates=$(gh release list -R deepseek-ai/deepseek-harness --limit 100 \
+              --json tagName,publishedAt \
+              --jq ".[] | select(.publishedAt >= \"$FORK_RELEASE_SINCE\") | .tagName | sub(\"^dsh-v\"; \"\")")
+            for candidate in $candidates; do
+              if ! released "$candidate"; then
+                requested="$candidate"
+                break
+              fi
+            done
+          fi
+          if [ -z "$requested" ]; then
+            # Nothing to build: name the released master version so the jobs skip.
+            requested="$cli_version"
+            echo "::notice::Every recent upstream release already exists on this fork."
+          fi
+          version="$requested"
+          tag="dsh-v${version}"
+          tap=true
+          ref=master
+          if [ "$version" = "$cli_version" ]; then
+            head=$(git rev-parse HEAD)
+          else
+            # Maintenance release: replay the fork patch series onto the tag.
+            tap=false
+            ref="release/${tag}"
+            git remote add upstream https://github.com/deepseek-ai/deepseek-harness.git 2>/dev/null || true
+            git fetch --no-tags upstream "refs/tags/${tag}:refs/tags/${tag}"
+            if git fetch origin "refs/heads/${ref}:refs/remotes/origin/${ref}" 2>/dev/null; then
+              git checkout -q -B "$ref" "refs/remotes/origin/${ref}"
+            else
+              git checkout -q -B "$ref" "refs/tags/${tag}"
+              for commit in $FORK_PATCH_COMMITS; do
+                if ! git cherry-pick -x "$commit"; then
+                  echo "::error::The fork patches do not apply to ${tag}. Resolve them locally, push ${ref}, and re-run."
+                  exit 1
+                fi
+              done
+              prepared_version=$(jq -r .version package.json)
+              if [ "$prepared_version" != "$version" ]; then
+                echo "::error::Prepared tree reports version ${prepared_version}, expected ${version}."
+                exit 1
+              fi
+              git push origin "$ref"
+            fi
+            head=$(git rev-parse HEAD)
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "head=$head" >> "$GITHUB_OUTPUT"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "tap=$tap" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
+          echo "Releasing $tag from $head ($ref)"
+      - name: Check the upstream and fork releases
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view '${{ steps.resolve.outputs.tag }}' -R deepseek-ai/deepseek-harness >/dev/null 2>&1; then
+            echo "upstream_exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "upstream_exists=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Upstream has not published ${{ steps.resolve.outputs.tag }}; this run builds nothing."
+          fi
+          if git ls-remote --exit-code --tags origin '${{ steps.resolve.outputs.tag }}' >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Tag ${{ steps.resolve.outputs.tag }} already exists; this run builds nothing."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  package:
+    name: Package ${{ matrix.target }}
+    needs: prepare
+    if: ${{ inputs.dry_run || (needs.prepare.outputs.exists != 'true' && needs.prepare.outputs.upstream_exists == 'true') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: mac-arm64
+            os: macos-15
+            script: package:mac:arm64:unsigned
+            workspace-root: .
+            asset-path: apps/desktop/.desktop-build/targets/mac-arm64/unsigned-artifacts/*.dmg
+            asset-filter: dmg
+          - target: mac-x64
+            os: macos-15
+            script: package:mac:x64:unsigned
+            workspace-root: .
+            asset-path: apps/desktop/.desktop-build/targets/mac-x64/unsigned-artifacts/*.dmg
+            asset-filter: dmg
+          - target: win-x64
+            os: windows-latest
+            script: package:win:x64:unsigned
+            # The fork's name pushes packaged paths past the Windows 260-character
+            # limit that the bundled LibreOffice kit enforces (its launcher never
+            # opts into long paths); a short repository root keeps every kit file
+            # below it. See libreoffice-kit's cppuhelper bootstrap directory open.
+            workspace-root: D:\dshrepo
+            asset-path: D:/dshrepo/apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/*.exe
+            asset-filter: exe
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.ref }}
+      - uses: pnpm/action-setup@v5.0.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.PRIMARY_NODE_VERSION }}
+      - name: Relocate the repository to a short Windows path
+        if: ${{ matrix.workspace-root != '.' }}
+        shell: bash
+        run: |
+          shopt -s dotglob
+          mkdir -p /d/dshrepo
+          mv "$GITHUB_WORKSPACE"/* /d/dshrepo/
+      - name: Enable Rosetta for the x64 target runtime
+        if: ${{ matrix.target == 'mac-x64' }}
+        run: /usr/sbin/softwareupdate --install-rosetta --agree-to-license
+      - name: Write the local unsigned packaging settings
+        working-directory: ${{ matrix.workspace-root }}
+        shell: bash
+        run: |
+          cd apps/desktop
+          release_id=$(openssl rand -hex 16)
+          settings='DSH_DESKTOP_APP_ID=com.deepseek.harness
+          DSH_DESKTOP_AUTO_UPDATE_ENV=test
+          DOWNLOAD_TEST_ORIGIN=https://updates.invalid
+          DOWNLOAD_TEST_RELEASE_ID='"$release_id"'
+          DSH_DESKTOP_MANDATORY_UPDATE_TEST_ORIGIN=https://updates.invalid
+          DSH_DESKTOP_MANDATORY_UPDATE_CONFIG={"allowedAuthOrigins":["https://updates.invalid"]}'
+          printf '%s\n' "$settings" > .env.macos
+          # The compression knob postdates older upstream tags, and the
+          # packaging environment rejects settings the tree does not know.
+          windows_settings=''
+          if grep -q DSH_DESKTOP_WINDOWS_COMPRESSION_LEVEL \
+            scripts/desktop-package-environment.mjs 2>/dev/null; then
+            windows_settings='DSH_DESKTOP_WINDOWS_COMPRESSION_LEVEL=3'
+          fi
+          if [ -n "$windows_settings" ]; then
+            printf '%s\n' "$settings" "$windows_settings" > .env.windows
+          else
+            printf '%s\n' "$settings" > .env.windows
+          fi
+      - name: Configure the pnpm store cache
+        id: pnpm-store
+        shell: bash
+        run: |
+          echo "path=$(pnpm store path)" >> "$GITHUB_OUTPUT"
+          # hashFiles() reads the original workspace root, which the Windows leg
+          # relocates to a short path; hash the relocated lockfile instead.
+          lock="${{ matrix.workspace-root }}/pnpm-lock.yaml"
+          echo "key=$(shasum -a 256 "$lock" | cut -c1-16)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: ${{ runner.os }}-pnpm-${{ steps.pnpm-store.outputs.key }}
+      - name: Install
+        working-directory: ${{ matrix.workspace-root }}
+        run: pnpm install --frozen-lockfile
+      - name: Build artifacts
+        working-directory: ${{ matrix.workspace-root }}
+        run: pnpm run build:artifacts
+      - name: Package
+        working-directory: ${{ matrix.workspace-root }}
+        run: pnpm --filter @deepseek-ai/dsh-desktop run ${{ matrix.script }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.target }}
+          if-no-files-found: error
+          path: ${{ matrix.asset-path }}
+
+  cli:
+    name: Bundle CLI ${{ matrix.target }}
+    needs: prepare
+    if: ${{ inputs.dry_run || (needs.prepare.outputs.exists != 'true' && needs.prepare.outputs.upstream_exists == 'true') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Plain-node bundles are ABI-bound to their build host: Intel Macs
+          # stay on the source-build formula until an x64 bundling leg lands.
+          - target: mac-arm64
+            os: macos-15
+            workspace-root: .
+          - target: win-x64
+            os: windows-latest
+            workspace-root: D:\dshrepocli
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      DSH_CLIENT_COMMIT_HASH: ${{ needs.prepare.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.ref }}
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v5.0.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.PRIMARY_NODE_VERSION }}
+      - name: Relocate the repository to a short Windows path
+        if: ${{ matrix.workspace-root != '.' }}
+        shell: bash
+        run: |
+          shopt -s dotglob
+          mkdir -p /d/dshrepocli
+          mv "$GITHUB_WORKSPACE"/* /d/dshrepocli/
+      - name: Configure the pnpm store cache
+        id: pnpm-store
+        shell: bash
+        run: |
+          echo "path=$(pnpm store path)" >> "$GITHUB_OUTPUT"
+          lock="${{ matrix.workspace-root }}/pnpm-lock.yaml"
+          echo "key=$(shasum -a 256 "$lock" | cut -c1-16)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: ${{ runner.os }}-pnpm-cli-${{ steps.pnpm-store.outputs.key }}
+      - name: Install
+        working-directory: ${{ matrix.workspace-root }}
+        run: pnpm install --frozen-lockfile
+      - name: Build the official CLI closure
+        working-directory: ${{ matrix.workspace-root }}
+        run: pnpm run build:official
+      - name: Pack the release families
+        working-directory: ${{ matrix.workspace-root }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm run release:pack --family dsh --out dist/npm
+          pnpm run release:pack --family vendor --out dist/npm-vendor
+          pnpm --dir native/system run build:ts
+          pnpm --dir native/system/packages/entry pack --pack-destination "$PWD/dist/npm-landlock"
+      - name: Provide the fork's consumer manifest helper
+        # The helper is fork-owned and postdates older upstream tags, so a
+        # maintenance tree may not carry it; take master's copy either way.
+        working-directory: ${{ matrix.workspace-root }}
+        shell: bash
+        run: |
+          git fetch --depth=1 origin master
+          git show FETCH_HEAD:scripts/release/write-consumer-manifest.mjs \
+            > scripts/release/write-consumer-manifest.mjs
+      - name: Install the portable CLI tree from local tarballs
+        working-directory: ${{ matrix.workspace-root }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf cli-stage
+          mkdir -p cli-stage/dsh
+          # Same consumer-manifest mapping as verify-packed-install.ts: every
+          # workspace dependency resolves from a file: URL, so the registry can
+          # never substitute upstream builds. (pnpm deploy drops the vendored
+          # peer dependencies and re-resolves workspace: specs against the registry.)
+          node scripts/release/write-consumer-manifest.mjs \
+            --out cli-stage/dsh/package.json --from dist/npm --from dist/npm-vendor --from dist/npm-landlock
+          # Optionals stay enabled: npm skips foreign-platform ones by os/cpu,
+          # while the current platform prebuilt
+          # optionals (e.g. koffi) must install.
+          npm install --prefix "$PWD/cli-stage/dsh" --cache "$RUNNER_TEMP/.npm-cache" \
+            --no-audit --no-fund --package-lock=false
+          mkdir -p cli-stage/dsh/bin
+          printf '%s\n' '#!/bin/sh' \
+            '# dsh CLI bundle. Requires Node.js >= 24 on PATH.' \
+            'D=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)' \
+            'exec node "$D/node_modules/@deepseek-ai/dsh/lib/bin.js" "$@"' \
+            > cli-stage/dsh/bin/dsh
+          chmod 755 cli-stage/dsh/bin/dsh
+          printf '%s\n' '@echo off' \
+            'REM dsh CLI bundle. Requires Node.js >= 24 on PATH.' \
+            'node "%~dp0..\node_modules\@deepseek-ai\dsh\lib\bin.js" %*' \
+            > cli-stage/dsh/bin/dsh.cmd
+          test -f cli-stage/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js || { echo '::error::consumer install did not stage the dsh entry'; exit 1; }
+      - name: Archive the CLI bundle
+        working-directory: ${{ matrix.workspace-root }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version='${{ needs.prepare.outputs.version }}'
+          tar -czf "dsh-${version}-${{ matrix.target }}.tar.gz" -C cli-stage dsh
+          ls -la "dsh-${version}-${{ matrix.target }}.tar.gz"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.target }}
+          if-no-files-found: error
+          path: ${{ matrix.workspace-root }}/dsh-${{ needs.prepare.outputs.version }}-${{ matrix.target }}.tar.gz
+
+  release:
+    name: Publish the versioned release and refresh the tap
+    needs: [prepare, package, cli]
+    if: ${{ !cancelled() && (inputs.dry_run || (needs.prepare.outputs.exists != 'true' && needs.prepare.outputs.upstream_exists == 'true')) }}
+    env:
+      FORK_TAP_TOKEN: ${{ secrets.FORK_TAP_TOKEN }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.ref }}
+          fetch-depth: 0
+          # Creating the release tag is a new ref, and GitHub compares its tree
+          # against the default branch. When the built commit and the current
+          # master differ in .github/workflows, GITHUB_TOKEN is refused without
+          # the Workflows permission, so push the tag with the fork token.
+          token: ${{ secrets.FORK_TAP_TOKEN || github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: desktop-*
+          merge-multiple: true
+          path: release-assets
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: cli-*
+          merge-multiple: true
+          path: release-assets
+      - name: Require every packaging leg's artifact
+        # A failed leg must stop the release before the tag exists, so the
+        # version can be rebuilt by re-dispatching this workflow.
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for asset in \
+            "deepseek-harness-${VERSION}-mac-arm64-unsigned.dmg" \
+            "deepseek-harness-${VERSION}-mac-x64-unsigned.dmg" \
+            "deepseek-harness-${VERSION}-win-x64-unsigned.exe" \
+            "dsh-${VERSION}-mac-arm64.tar.gz" \
+            "dsh-${VERSION}-win-x64.tar.gz"; do
+            if [ ! -f "release-assets/$asset" ]; then
+              echo "::error::Missing $asset; its packaging leg did not finish."
+              missing=1
+            fi
+          done
+          exit "$missing"
+      - name: Tag and publish the stable release
+        id: publish
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag='${{ needs.prepare.outputs.tag }}'
+          head='${{ needs.prepare.outputs.head }}'
+          version='${{ needs.prepare.outputs.version }}'
+          upstream=$(gh release view "$tag" -R deepseek-ai/deepseek-harness --json body,isPrerelease)
+          prerelease=$(jq -r .isPrerelease <<<"$upstream")
+          # Mirror the upstream changelog for this version underneath the fork
+          # header, so the release reads like its upstream counterpart while
+          # still stating what this fork changes.
+          upstream_notes=$(jq -j .body <<<"$upstream")
+          {
+            echo "No-telemetry fork of DeepSeek Harness $version (upstream-identical version; telemetry removed at the source)."
+            echo ""
+            echo "Install: \`brew tap nentor/tap && brew install --cask deepseek-harness\` (Desktop + CLI) or \`brew install dsh\` (CLI only)."
+            echo "Desktop builds are unsigned: clear quarantine before first launch (see tap caveats)."
+            echo "Intel Mac CLI: use the formula (source build); prebuilt CLI bundles ship mac-arm64 and win-x64."
+            if [ -n "$upstream_notes" ]; then
+              echo ""
+              echo "---"
+              echo ""
+              echo "## Upstream changes in $version"
+              echo ""
+              echo "$upstream_notes"
+            fi
+          } > release-notes.md
+          release_args=(--latest=true)
+          if [ "$prerelease" = 'true' ]; then
+            release_args=(--prerelease --latest=false)
+          fi
+          if [ ! -e release-assets ] || [ -z "$(find release-assets -type f -print -quit)" ]; then
+            echo '::error::No artifacts were produced by any packaging leg.'
+            exit 1
+          fi
+          git config user.name 'desktop-release-bot'
+          git config user.email 'desktop-release-bot@localhost'
+          git tag "$tag" "$head"
+          if ! git push origin "$tag"; then
+            echo '::error::Tag push rejected; the release token needs Contents and Workflows write when the tag tree differs from master in .github/workflows.'
+            exit 1
+          fi
+          gh release create "$tag" release-assets/* \
+            "${release_args[@]}" \
+            --title "v${version}-no-telemetry" \
+            --notes-file release-notes.md
+      - name: Generate the Homebrew cask
+        id: cask
+        if: ${{ !inputs.dry_run && needs.prepare.outputs.tap == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag='${{ needs.prepare.outputs.tag }}'
+          version='${{ needs.prepare.outputs.version }}'
+          product_version="$version"
+          cask_version="${version}-no-telemetry"
+          arm_dmg="release-assets/deepseek-harness-${product_version}-mac-arm64-unsigned.dmg"
+          intel_dmg="release-assets/deepseek-harness-${product_version}-mac-x64-unsigned.dmg"
+          arm_sha=""
+          intel_sha=""
+          if [ -f "$arm_dmg" ]; then arm_sha=$(sha256sum "$arm_dmg" | cut -d' ' -f1); fi
+          if [ -f "$intel_dmg" ]; then intel_sha=$(sha256sum "$intel_dmg" | cut -d' ' -f1); fi
+          if [ -z "$arm_sha" ] && [ -z "$intel_sha" ]; then
+            echo '::error::No mac DMG artifacts; the tap cask cannot be refreshed.'
+            exit 1
+          fi
+          base_url="https://github.com/nentor/deepseek-harness-no-telemetry/releases/download/${tag}"
+          {
+            echo 'cask "deepseek-harness" do'
+            if [ -n "$intel_sha" ]; then
+              echo '  arch arm: "arm64", intel: "x64"'
+              echo "  version \"$cask_version\""
+              echo "  sha256 arm: \"$arm_sha\", intel: \"$intel_sha\""
+              echo "  url \"${base_url}/deepseek-harness-${product_version}-mac-#{arch}-unsigned.dmg\""
+            else
+              echo "  version \"$cask_version\""
+              echo "  sha256 \"$arm_sha\""
+              echo "  url \"${base_url}/deepseek-harness-${product_version}-mac-arm64-unsigned.dmg\""
+            fi
+            echo '  name "DeepSeek Harness (no telemetry)"'
+            echo '  desc "DeepSeek agent-harness desktop, forked with outbound telemetry removed"'
+            echo '  homepage "https://github.com/nentor/deepseek-harness-no-telemetry"'
+            echo '  app "DeepSeek Harness.app"'
+            echo '  binary "#{appdir}/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh", target: "dsh"'
+            echo '  caveats "Unsigned build: clear quarantine before first launch: xattr -dr com.apple.quarantine /Applications/Deep Seek Harness.app"'
+            echo 'end'
+          } > cask.rb
+          cat cask.rb
+      - name: Generate the Homebrew formula
+        id: formula
+        if: ${{ !inputs.dry_run && needs.prepare.outputs.tap == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag='${{ needs.prepare.outputs.tag }}'
+          version='${{ needs.prepare.outputs.version }}'
+          product_version="$version"
+          cask_version="${version}-no-telemetry"
+          commit='${{ needs.prepare.outputs.commit }}'
+          src_url="https://github.com/nentor/deepseek-harness-no-telemetry/archive/refs/tags/${tag}.tar.gz"
+          curl -sL -o src.tar.gz "$src_url"
+          src_sha=$(sha256sum src.tar.gz | cut -d' ' -f1)
+          {
+            echo 'require "json"'
+            echo ''
+            echo 'class Dsh < Formula'
+            echo '  desc "Agent-harness CLI (no-telemetry fork)"'
+            echo '  homepage "https://github.com/nentor/deepseek-harness-no-telemetry"'
+            echo "  url \"$src_url\""
+            echo "  version \"$cask_version\""
+            echo "  sha256 \"$src_sha\""
+            echo '  license "MIT"'
+            echo '  depends_on "cmake" => :build'
+            echo '  depends_on "pnpm" => :build'
+            echo '  depends_on "node@24"'
+            echo '  # cmake is a safety net: koffi falls back to a source build when no prebuilt'
+            echo '  # is available (CI runners provide cmake for the same reason).'
+            echo ''
+            echo '  def install'
+            echo '    # Tag tarballs carry no .git metadata; the build accepts the commit explicitly.'
+            echo "    ENV[\"DSH_CLIENT_COMMIT_HASH\"] = \"$commit\""
+            echo '    system "pnpm", "install", "--frozen-lockfile"'
+            echo '    system "pnpm", "run", "build:official"'
+            echo '    # Pack the workspace and install from local tarballs exactly like CI'
+            echo '    # packed-install verification: every workspace dependency resolves from a'
+            echo '    # file: URL, so the registry can never substitute upstream builds.'
+            echo '    # (pnpm deploy drops the vendored peer dependencies and re-resolves'
+            echo '    # workspace: specs against the registry.)'
+            echo '    # The mapping is inlined (rather than calling the repo helper script) so'
+            echo '    # generated formulas also build tag trees that predate the helper.'
+            echo '    system "pnpm", "run", "release:pack", "--family", "dsh", "--out", "dist/npm"'
+            echo '    system "pnpm", "run", "release:pack", "--family", "vendor", "--out", "dist/npm-vendor"'
+            echo '    system "pnpm", "--dir", "native/system", "run", "build:ts"'
+            echo '    system "pnpm", "--dir", "native/system/packages/entry", "pack",'
+            echo '                    "--pack-destination", "#{buildpath}/dist/npm-landlock"'
+            echo '    consumer = {'
+            echo '      "name"                 => "dsh-brew-consumer",'
+            echo '      "version"              => "0.0.0",'
+            echo '      "private"              => true,'
+            echo '      "dependencies"         => {},'
+            echo '      "optionalDependencies" => {},'
+            echo '    }'
+            echo '    os = RUBY_PLATFORM.include?("darwin") ? "darwin" : "linux"'
+            echo '    arch = (RUBY_PLATFORM.include?("arm64") || RUBY_PLATFORM.include?("aarch64")) ? "arm64" : "x64"'
+            echo '    accept = lambda do |value, current|'
+            echo '      return true if value.nil?'
+            echo ''
+            echo '      valid = value.is_a?(Array) && value.all?(String)'
+            echo '      raise "packed platform constraints must be arrays of strings" unless valid'
+            echo ''
+            echo '      accepted = value.all? { |t| t.start_with?("!") }'
+            echo '      value.each do |tag|'
+            echo '        return false if tag == "!#{current}"'
+            echo ''
+            echo '        accepted = true if tag == current || (tag == "any" && value.length == 1)'
+            echo '      end'
+            echo '      accepted'
+            echo '    end'
+            echo '    Dir["dist/npm/*.tgz", "dist/npm-vendor/*.tgz", "dist/npm-landlock/*.tgz"].sort.each do |tgz|'
+            echo '      manifest = JSON.parse(Utils.safe_popen_read("tar", "-xzf", tgz, "-O", "package/package.json"))'
+            echo '      name = manifest["name"]'
+            echo '      raise "packed tarball manifest lacks name" unless name.is_a?(String)'
+            echo ''
+            echo '      compatible = accept.call(manifest["os"], os) && accept.call(manifest["cpu"], arch)'
+            echo '      key = compatible ? "dependencies" : "optionalDependencies"'
+            echo '      consumer[key][name] = "file://#{File.expand_path(tgz)}"'
+            echo '    end'
+            echo '    raise "no packed tarballs found" if consumer["dependencies"].empty?'
+            echo ''
+            echo '    (libexec/"package.json").write(JSON.generate(consumer))'
+            echo '    # Local consumer install, not a global pack install, so the global-style'
+            echo '    # std_npm_args helper does not apply here. Optionals stay enabled: npm'
+            echo '    # skips foreign-platform ones by os/cpu, while the current platform prebuilt'
+            echo '    # optionals (e.g. koffi) must install.'
+            echo '    system "npm", "install", "--prefix=#{libexec}", "--cache=#{buildpath}/.npm-cache",'
+            echo '                    "--no-audit", "--no-fund", "--package-lock=false"'
+            echo '    # Drop bundled foreign-arch macOS prebuilds (e.g. node-pty, pi-tui ship'
+            echo '    # per-arch directories; Homebrew rejects non-native binaries in the'
+            echo '    # prefix). The loader selects by platform and arch, so a foreign-arch'
+            echo '    # directory can never be used on this host.'
+            echo '    foreign ='
+            echo '      if OS.mac?'
+            echo '        [Hardware::CPU.arm? ? "darwin-x64" : "darwin-arm64"]'
+            echo '      else'
+            echo '        %w[darwin-x64 darwin-arm64]'
+            echo '      end'
+            echo '    foreign.each do |dir_name|'
+            echo '      Dir.glob(libexec/"node_modules/**/#{dir_name}").each do |path|'
+            echo '        rm_r path if File.directory?(path)'
+            echo '      end'
+            echo '    end'
+            echo '    (bin/"dsh").write <<~EOS'
+            echo '      #!/bin/sh'
+            echo '      # Standalone dsh on plain node (Desktop ships its own Electron-based launcher).'
+            echo '      exec "#{formula_opt_bin("node@24")}/node" "#{libexec}/node_modules/@deepseek-ai/dsh/lib/bin.js" "$@"'
+            echo '    EOS'
+            echo '    chmod 0755, bin/"dsh"'
+            echo '  end'
+            echo ''
+            echo '  test do'
+            echo '    assert_match "'"$product_version"'", shell_output("#{bin}/dsh --version")'
+            echo '  end'
+            echo 'end'
+          } > dsh.rb
+          cat dsh.rb
+      - name: Push the cask and formula to the tap
+        if: ${{ !inputs.dry_run && needs.prepare.outputs.tap == 'true' && env.FORK_TAP_TOKEN != '' }}
+        run: |
+          git clone --depth 1 "https://x-access-token:${FORK_TAP_TOKEN}@github.com/nentor/homebrew-tap.git" tap
+          mkdir -p tap/Casks tap/Formula
+          cp cask.rb tap/Casks/deepseek-harness.rb
+          cp dsh.rb tap/Formula/dsh.rb
+          git -C tap config user.name 'desktop-release-bot'
+          git -C tap config user.email 'desktop-release-bot@localhost'
+          git -C tap add Casks/deepseek-harness.rb Formula/dsh.rb
+          git -C tap diff --cached --quiet || { git -C tap commit -m "deepseek-harness ${{ needs.prepare.outputs.version }}-no-telemetry"; git -C tap push; }
+      - name: Require the tap token for a real release
+        if: ${{ !inputs.dry_run && needs.prepare.outputs.tap == 'true' && env.FORK_TAP_TOKEN == '' }}
+        run: |
+          echo '::error::FORK_TAP_TOKEN is not configured; the release was published but the tap was not updated.'
+          exit 1

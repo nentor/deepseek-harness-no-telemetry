@@ -1,0 +1,98 @@
+name: Fork Upstream Sync
+
+# Merge upstream master into this fork while retaining the no-telemetry patches.
+# Versioned releases are built separately by fork-versioned-release.yml.
+#
+# GITHUB_TOKEN may never push .github/workflows, so a merge that carries
+# upstream workflow edits is pushed without them and this fork keeps its own CI
+# definitions. A token with the Workflows permission (FORK_SYNC_TOKEN, or the
+# existing FORK_TAP_TOKEN when it also covers this repository) mirrors them.
+
+on:
+  schedule:
+    - cron: '0 5 * * *'
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  # The sync job pushes upstream merges that routinely touch workflow files.
+  # That push requires Settings → Actions → General → Workflow permissions →
+  # Read and write; `workflows` is not a valid permissions key.
+
+concurrency:
+  group: fork-upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Sync master against upstream
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # Upstream edits .github/workflows regularly, and GITHUB_TOKEN may
+          # never push workflow files. Either secret needs Contents write here
+          # and Workflows write to carry upstream's CI definitions.
+          token: ${{ secrets.FORK_SYNC_TOKEN || secrets.FORK_TAP_TOKEN || github.token }}
+      - name: Configure a generic git identity for the automated merge
+        run: |
+          git config user.name 'desktop-release-bot'
+          git config user.email 'desktop-release-bot@localhost'
+      - name: Fetch upstream
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/deepseek-ai/deepseek-harness.git
+          git fetch --no-tags --force upstream '+refs/heads/master:refs/remotes/upstream/master'
+          # A ref left behind the advertised head makes the merge a no-op that
+          # still reports success, so the fork silently stops tracking upstream.
+          advertised=$(git ls-remote upstream refs/heads/master | cut -f1)
+          if [ "$(git rev-parse upstream/master)" != "$advertised" ]; then
+            git fetch --no-tags --force upstream "+${advertised}:refs/remotes/upstream/master"
+          fi
+          if [ "$(git rev-parse upstream/master)" != "$advertised" ]; then
+            echo "::error::Fetched $(git rev-parse upstream/master) while upstream advertises $advertised."
+            exit 1
+          fi
+      - name: Merge upstream master
+        id: merge
+        run: |
+          if git merge --no-edit upstream/master; then
+            if [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/master)" ]; then
+              echo 'Upstream already merged: no new commit.'
+            else
+              echo 'merged=true' >> "$GITHUB_OUTPUT"
+            fi
+          else
+            git merge --abort
+            echo '::error::Upstream merge conflicts with the fork changes. Re-run locally, resolve, commit, and push.'
+            exit 1
+          fi
+      - name: Push the synced master
+        if: ${{ steps.merge.outputs.merged == 'true' }}
+        run: |
+          if push_output=$(git push origin "master:master" 2>&1); then
+            echo "$push_output"
+            echo '::notice::Synced the fork master.'
+            exit 0
+          fi
+          echo "$push_output"
+          if ! grep -q 'without `workflows` permission' <<<"$push_output"; then
+            echo '::error::Push rejected; re-run once the remote state is reconciled.'
+            exit 1
+          fi
+          # Upstream edited .github/workflows, which GITHUB_TOKEN may not push.
+          # Keep this fork's CI definitions, drop upstream's edits, and push the
+          # merge; the release workflows never use upstream's CI files.
+          rm -rf .github/workflows
+          git checkout HEAD^1 -- .github/workflows
+          git add -A .github/workflows
+          git commit --quiet --amend --no-edit
+          if ! git push origin "master:master"; then
+            echo '::error::Push rejected after dropping upstream workflow edits.'
+            exit 1
+          fi
+          echo '::warning::Synced the fork master without upstream workflow edits; the sync token lacks the Workflows permission.'
