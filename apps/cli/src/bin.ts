@@ -24,6 +24,10 @@ export type RunCliOptions = Pick<RunProfileOptions, 'packageManager'> & {
  * @returns a promise that settles when the selected command mode finishes.
  */
 export async function runCli(options: RunCliOptions = {}): Promise<void> {
+  // No-telemetry build: every command-mode process opts out before arguments,
+  // `.env` layers, or child processes observe the environment. The switch
+  // disables every composed telemetry row and omits provider attribution.
+  process.env.DSH_TELEMETRY_DISABLED = '1'
   const version = getDshRuntimeVersion()
   const { manageDesktopProfile, ...profileOptions } = options
   const invocation = parseDshArgs(process.argv.slice(2), version, manageDesktopProfile)

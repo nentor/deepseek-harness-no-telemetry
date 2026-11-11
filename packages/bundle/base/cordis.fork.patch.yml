@@ -4,10 +4,16 @@
 # upstream merges stay clean. Each entry disables a row by id and restates no
 # upstream configuration, so upstream edits to that row need no follow-up here.
 # A row that never mounts cannot capture, send, or be re-enabled from settings;
-# the launcher's DSH_TELEMETRY_DISABLED switch still applies above user and
-# overlay patches.
+# the launcher's DSH_TELEMETRY_DISABLED switch stays valid, applies above user
+# and overlay patches, and covers every telemetry row this composition carries.
 - id: session-log-deepseek
   disabled: true
+
+# Omit provider-request diagnostics while keeping the row mounted, so its
+# agent-registry read still initializes with the rest of the composition.
+- id: plugin-package-inventory-deepseek
+  config:
+    enabled: false
 
 - id: session-telemetry-otel
   disabled: true

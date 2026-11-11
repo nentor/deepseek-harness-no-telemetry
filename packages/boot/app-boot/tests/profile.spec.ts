@@ -225,6 +225,31 @@ it('composes current files from profile data and retains launch overlay and tele
   expect(composeEntries([readProfilePatches('test', { ...enabled, overlays: [] })])[0]?.disabled).toBe(false)
 })
 
+it('disables every telemetry row present after overlays when the switch is set', () => {
+  const home = tmp()
+  const installAnchor = stageInstallation({
+    base: {
+      patch: '- insert:\n  - id: session-telemetry-otel\n    name: telemetry\n  - id: desktop-product-telemetry\n    name: product-telemetry\n',
+    },
+  })
+  const dir = resolveProfileDir('test', home)
+  initProfile(dir, ['base'])
+  const patchPath = join(dir, 'application.patch.yml')
+  writeFileSync(patchPath, '[]\n')
+  const context = {
+    name: 'test', dir, patchPath, installAnchor, home, cwd: home,
+    startedBundles: ['base'],
+    overlays: [
+      { id: 'session-telemetry-otel', disabled: false },
+      { id: 'desktop-product-telemetry', disabled: false },
+    ],
+    telemetryDisabledEnv: '1',
+  }
+  const rows = composeEntries([readProfilePatches('test', context)])
+  expect(rows.filter(row => row.id === 'session-telemetry-otel' || row.id === 'desktop-product-telemetry')
+    .map(row => row.disabled)).toEqual([true, true])
+})
+
 describe('initProfile', () => {
   it('creates manifest, user patch layer, and pnpm workspace once, never overwriting', () => {
     const home = tmp()

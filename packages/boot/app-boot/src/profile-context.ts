@@ -36,22 +36,49 @@ declare module '@deepseek-ai/cordis' {
   }
 }
 
-const TELEMETRY_ROW_ID = 'session-telemetry-otel'
+/**
+ * Rows that send telemetry or per-install attribution. The opt-out switch
+ * disables each row the composed profile actually carries, after every user
+ * and `--patch` overlay has applied.
+ */
+const TELEMETRY_ROW_IDS = [
+  'session-log-deepseek',
+  'session-telemetry-otel',
+  'desktop-product-telemetry',
+  'product-analytics',
+] as const
 
 /**
- * Resolve the telemetry opt-out switch into its boot patch. ANY non-empty
- * value (including `'0'`/`'false'`) disables: a privacy switch prefers
- * off-by-mistake over on-by-mistake. A composition without the telemetry row
- * exports nothing, so the switch is then trivially satisfied and no patch is
- * generated — custom profiles need not mount telemetry to run with the
- * switch set.
- * @param disabledEnv - the raw `DSH_TELEMETRY_DISABLED` value (`undefined` when unset).
- * @param hasRow - whether the composition carries the telemetry row.
- * @returns the disable patch, or `undefined` when no hard-disable patch is required.
+ * Rows that must stay mounted but send no outbound contribution. Disabling the
+ * row would also skip its hosting work (the package inventory initializes the
+ * live agent registry), so the opt-out clears the contribution instead.
  */
-export function resolveTelemetryPatch(disabledEnv: string | undefined, hasRow: boolean): PatchOptions | undefined {
-  if ((disabledEnv ?? '') === '' || !hasRow) return undefined
-  return { id: TELEMETRY_ROW_ID, disabled: true }
+const TELEMETRY_CONTRIBUTION_ROW_IDS = [
+  'plugin-package-inventory-deepseek',
+] as const
+
+/**
+ * Resolve the telemetry opt-out switch into its boot patches. ANY non-empty
+ * value (including `'0'`/`'false'`) opts out: a privacy switch prefers
+ * off-by-mistake over on-by-mistake. A composition without a telemetry row
+ * exports nothing, so the switch is then trivially satisfied and no patch is
+ * generated for that row — custom profiles need not mount telemetry to run
+ * with the switch set.
+ * @param disabledEnv - the raw `DSH_TELEMETRY_DISABLED` value (`undefined` when unset).
+ * @param rowIds - telemetry row ids present in the composed profile.
+ * @param contributionRowIds - mounted rows whose outbound contribution is disabled.
+ * @returns disable and contribution patches for the present rows, in order.
+ */
+export function resolveTelemetryPatches(
+  disabledEnv: string | undefined,
+  rowIds: readonly string[],
+  contributionRowIds: readonly string[] = [],
+): PatchOptions[] {
+  if ((disabledEnv ?? '') === '') return []
+  return [
+    ...rowIds.map(id => ({ id, disabled: true })),
+    ...contributionRowIds.map(id => ({ id, config: { enabled: false } })),
+  ]
 }
 
 /** Read the selected bundles' patches, which apply before the profile patch file.
@@ -78,8 +105,13 @@ export function readProfilePatches(binName: string, context: ProfileContext, ini
     ...(loadOptionalPatches(binName, join(context.home, PROFILE_PATCH_FILENAME)) ?? []),
     ...context.overlays,
   ])
-  const telemetryPatch = resolveTelemetryPatch(context.telemetryDisabledEnv,
-    composeEntries([patches]).some(row => row.id === TELEMETRY_ROW_ID))
-  if (telemetryPatch !== undefined) patches.push(telemetryPatch)
+  const rows = composeEntries([patches])
+  const presentTelemetryIds = TELEMETRY_ROW_IDS.filter(id => rows.some(row => row.id === id))
+  const presentContributionIds = TELEMETRY_CONTRIBUTION_ROW_IDS.filter(id => rows.some(row => row.id === id))
+  patches.push(...resolveTelemetryPatches(
+    context.telemetryDisabledEnv,
+    presentTelemetryIds,
+    presentContributionIds,
+  ))
   return patches
 }

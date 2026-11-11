@@ -147,14 +147,15 @@ export class DeepSeekAdapter<C extends Connection = Connection> extends LlmAdapt
             ...auth.headers,
             'anthropic-version': '2023-06-01',
             ...betas.length === 0 ? {} : { 'anthropic-beta': betas.join(',') },
-            // A non-empty DSH_TELEMETRY_DISABLED opts this process out of
-            // per-install attribution, the same switch the launcher applies to
-            // the telemetry row.
+            // A non-empty DSH_TELEMETRY_DISABLED omits per-install and
+            // per-request attribution; every dsh-launched app sets it.
             ...((process.env.DSH_TELEMETRY_DISABLED ?? '') === ''
-              ? { 'x-deepseek-harness-user-id': this.dependencies.resolveUserId() }
+              ? {
+                'x-deepseek-harness-user-id': this.dependencies.resolveUserId(),
+                ...options.sessionId === undefined ? {} : { 'x-deepseek-harness-session-id': String(options.sessionId) },
+                ...requestIdentity.purpose === 'compaction' ? { 'x-deepseek-harness-compact': '1' } : {},
+              }
               : {}),
-            ...options.sessionId === undefined ? {} : { 'x-deepseek-harness-session-id': String(options.sessionId) },
-            ...requestIdentity.purpose === 'compaction' ? { 'x-deepseek-harness-compact': '1' } : {},
           },
         })
         if (!response.ok) {
