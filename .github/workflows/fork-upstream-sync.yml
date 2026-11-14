@@ -42,6 +42,10 @@ jobs:
         run: |
           git config user.name 'desktop-release-bot'
           git config user.email 'desktop-release-bot@localhost'
+          # The fork keeps generated snapshots on conflict (snapshots/** merge=ours
+          # in .gitattributes); the driver definition lives in git config, so
+          # register it here before merging.
+          git config merge.ours.driver true
       - name: Fetch upstream
         run: |
           set -euo pipefail

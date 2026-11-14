@@ -9,10 +9,9 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import * as yaml from 'js-yaml'
 import { describe, expect, it } from 'vitest'
 import { bundlePatchPaths } from '@deepseek-ai/dsh-app-boot'
-import { applyEntryPatches, entryListSchema, type PatchOptions } from '@deepseek-ai/cordis-plugin-include'
+import { applyEntryPatches, parseEntryYaml, type PatchOptions } from '@deepseek-ai/cordis-plugin-include'
 import type { EntryOptions } from '@deepseek-ai/cordis-plugin-loader'
 
 /** Compose the listed bundle layers in profile order over an empty root. */
@@ -32,7 +31,7 @@ function compose(...bundles: string[]): { rows: EntryOptions[]; warnings: string
       expect(files.at(-1), `${bundle} must apply the fork layer last`).toMatch(/cordis\.fork\.patch\.yml$/)
     }
     for (const file of files) {
-      const patches = yaml.load(readFileSync(file, 'utf8'), { schema: entryListSchema }) as PatchOptions[]
+      const patches = parseEntryYaml(readFileSync(file, 'utf8')) as PatchOptions[]
       rows = applyEntryPatches(rows, patches, (format, ...args) => { warnings.push(`${format} ${args.join(' ')}`) })
     }
   }
