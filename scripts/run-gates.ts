@@ -401,6 +401,7 @@ function ciSharedStaticGates(): Gate[] {
     ...sharedHygieneGates(),
     pnpmScript('approval-policy', 'test:approval-policy', { label: 'Weighted approval policy' }),
     pnpmScript('issue-management', 'test:issue-management', { label: 'Issue management policy' }),
+    pnpmScript('merge-drivers', 'verify-merge-drivers', { label: 'merge driver registration' }),
   ]
 }
 
