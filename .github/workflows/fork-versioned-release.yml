@@ -482,7 +482,7 @@ jobs:
             echo ""
             echo "Install: \`brew tap nentor/tap && brew install --cask deepseek-harness\` (Desktop + CLI) or \`brew install dsh\` (CLI only)."
             echo "Desktop builds are unsigned: clear quarantine before first launch (see tap caveats)."
-            echo "Intel Mac CLI: use the formula (source build); prebuilt CLI bundles ship mac-arm64 and win-x64."
+            echo "Intel Mac CLI: use the formula (source build); Apple Silicon pours a bottle when published, otherwise builds from source. Prebuilt CLI bundles ship mac-arm64 and win-x64."
             if [ -n "$upstream_notes" ]; then
               echo ""
               echo "---"
@@ -579,6 +579,9 @@ jobs:
             echo "  version \"$cask_version\""
             echo "  sha256 \"$src_sha\""
             echo '  license "MIT"'
+            echo '  bottle do'
+            echo "    root_url \"https://github.com/nentor/deepseek-harness-no-telemetry/releases/download/${tag}\""
+            echo '  end'
             echo '  depends_on "cmake" => :build'
             echo '  depends_on "pnpm" => :build'
             echo '  depends_on "node@24"'
@@ -687,4 +690,72 @@ jobs:
         if: ${{ !inputs.dry_run && needs.prepare.outputs.tap == 'true' && env.FORK_TAP_TOKEN == '' }}
         run: |
           echo '::error::FORK_TAP_TOKEN is not configured; the release was published but the tap was not updated.'
+          exit 1
+
+  bottle:
+    name: Bottle CLI mac-arm64
+    needs: [prepare, release]
+    if: ${{ !cancelled() && !inputs.dry_run && needs.prepare.outputs.tap == 'true' && needs.release.result == 'success' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Apple Silicon pours from bottles; Intel Macs stay on the
+          # source-build formula until an x64 bottling leg lands.
+          - target: mac-arm64
+            os: macos-15
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - name: Pour a bottle build from the tap formula
+        run: |
+          set -euo pipefail
+          brew tap nentor/tap
+          brew install --build-bottle nentor/tap/dsh
+      - name: Smoke-test the bottled keg
+        run: brew test nentor/tap/dsh
+      - name: Bottle the installed keg and publish it
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag='${{ needs.prepare.outputs.tag }}'
+          root_url="https://github.com/nentor/deepseek-harness-no-telemetry/releases/download/${tag}"
+          cd "$(mktemp -d)"
+          brew bottle --json --root-url="$root_url" nentor/tap/dsh
+          gh release upload "$tag" *.bottle.tar.gz *.bottle.json \
+            --repo nentor/deepseek-harness-no-telemetry --clobber
+
+  bottles-merge:
+    name: Merge Homebrew bottles into the tap formula
+    needs: [prepare, bottle]
+    if: ${{ !cancelled() && !inputs.dry_run && needs.prepare.outputs.tap == 'true' && needs.bottle.result == 'success' }}
+    env:
+      FORK_TAP_TOKEN: ${{ secrets.FORK_TAP_TOKEN }}
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - name: Merge bottle hashes into the tap formula
+        if: ${{ env.FORK_TAP_TOKEN != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag='${{ needs.prepare.outputs.tag }}'
+          git clone --depth 1 "https://x-access-token:${FORK_TAP_TOKEN}@github.com/nentor/homebrew-tap.git" tap
+          mkdir -p bottles
+          gh release download "$tag" --repo nentor/deepseek-harness-no-telemetry \
+            --pattern 'dsh--*.bottle.json' --dir bottles --clobber
+          brew tap nentor/tap
+          tapped="$(brew --repo nentor/tap)"
+          (cd "$tapped" && brew bottle --merge --write --no-commit "$GITHUB_WORKSPACE/bottles"/*.json)
+          cp "$tapped/Formula/dsh.rb" tap/Formula/dsh.rb
+          git -C tap config user.name 'desktop-release-bot'
+          git -C tap config user.email 'desktop-release-bot@localhost'
+          git -C tap add Formula/dsh.rb
+          git -C tap diff --cached --quiet || { git -C tap commit -m "dsh ${{ needs.prepare.outputs.version }}-no-telemetry bottles"; git -C tap push; }
+      - name: Require the tap token for bottle publication
+        if: ${{ env.FORK_TAP_TOKEN == '' }}
+        run: |
+          echo '::error::FORK_TAP_TOKEN is not configured; bottles were uploaded but the tap formula was not updated.'
           exit 1
