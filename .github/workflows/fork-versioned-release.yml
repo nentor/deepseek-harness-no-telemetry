@@ -415,7 +415,7 @@ jobs:
 
   release:
     name: Publish the versioned release and refresh the tap
-    needs: [prepare, package, cli]
+    needs: [prepare, package, cli, egress-trap]
     if: ${{ !cancelled() && (inputs.dry_run || (needs.prepare.outputs.exists != 'true' && needs.prepare.outputs.upstream_exists == 'true')) }}
     env:
       FORK_TAP_TOKEN: ${{ secrets.FORK_TAP_TOKEN }}
@@ -759,3 +759,32 @@ jobs:
         run: |
           echo '::error::FORK_TAP_TOKEN is not configured; bottles were uploaded but the tap formula was not updated.'
           exit 1
+
+  egress-trap:
+    name: Egress trap (release gate)
+    needs: [prepare]
+    if: ${{ inputs.dry_run || (needs.prepare.outputs.exists != 'true' && needs.prepare.outputs.upstream_exists == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.ref }}
+      - uses: pnpm/action-setup@v5.0.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.PRIMARY_NODE_VERSION }}
+      - name: Configure the pnpm store cache
+        id: pnpm-store
+        shell: bash
+        run: |
+          echo "path=$(pnpm store path)" >> "$GITHUB_OUTPUT"
+          echo "key=$(shasum -a 256 pnpm-lock.yaml | cut -c1-16)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: ${{ runner.os }}-pnpm-${{ steps.pnpm-store.outputs.key }}
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Run the egress tripwire
+        run: pnpm run egress-trap
