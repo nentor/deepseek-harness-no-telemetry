@@ -33,6 +33,7 @@ describe('DSH_TELEMETRY_DISABLED attribution', () => {
   })
 
   it('keeps the headers when the switch is unset', async () => {
+    vi.stubEnv('DSH_TELEMETRY_DISABLED', '')
     const http = await endpoint()
     await assemble(adapter({ baseURL: http.url }).stream(attributed()))
     const headers = http.requests[0]?.headers

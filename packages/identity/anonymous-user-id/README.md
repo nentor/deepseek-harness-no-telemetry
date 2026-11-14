@@ -31,9 +31,9 @@ When you want the records your installation sends out to be recognizable as comi
 
 Three things your installation sends out carry the same id, so records line up across all of them:
 
-- **Session telemetry** — when session telemetry is enabled, your telemetry exports carry the id as the `user.id` resource attribute, so a collector can group an installation's records.
+- **Session telemetry** — your telemetry exports carry the id as the `user.id` resource attribute, so a collector can group an installation's records.
 - **Feedback** — each feedback acknowledgement names the anonymous installation that recorded it.
-- **DeepSeek requests** — every provider request carries the `x-deepseek-harness-user-id` header unless the process opts out with a non-empty `DSH_TELEMETRY_DISABLED`, so usage can be attributed per installation.
+- **DeepSeek requests** — every provider request carries the `x-deepseek-harness-user-id` header, so usage can be attributed per installation.
 
 ### Observing and resetting the id
 

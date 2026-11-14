@@ -22,6 +22,9 @@ patches/*.patch whitespace=-blank-at-eol
 # pairing records join them, and a package's types-only module is part of its interface.
 packages/*/*/locale/*.json dsh-review-layer=test
 locales.ts dsh-review-layer=test
-snapshots/** dsh-review-layer=test
+# Fork-owned generated outputs: upstream snapshot changes never merge by hand.
+# Conflicts keep the fork side and fail loud in snapshot replay; regenerate
+# with `pnpm test:snapshot:refresh` after an upstream sync instead.
+snapshots/** merge=ours dsh-review-layer=test
 *.i18n.yaml dsh-review-layer=test
 packages/*/*/src/types.ts dsh-review-layer=interface

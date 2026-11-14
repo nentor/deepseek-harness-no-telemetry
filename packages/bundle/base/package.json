@@ -34,7 +34,7 @@
   "license": "MIT",
   "dsh": {
     "bundle": {
-      "patch": ["./cordis.patch.yml", "./cordis.fork.patch.yml"]
+      "patch": "./cordis.patch.yml"
     }
   },
   "dependencies": {
@@ -142,6 +142,7 @@
     "@deepseek-ai/cordis": "workspace:~"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "workspace:~"
+    "@deepseek-ai/cordis": "workspace:~",
+    "@deepseek-ai/dsh-app-boot": "workspace:*"
   }
 }

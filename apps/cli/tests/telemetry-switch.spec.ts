@@ -1,30 +1,22 @@
 import { describe, expect, it } from 'vitest'
-import { resolveTelemetryPatches } from '@deepseek-ai/dsh-app-boot'
+import { resolveTelemetryPatch } from '@deepseek-ai/dsh-app-boot'
 
-const ROWS = ['session-log-deepseek', 'session-telemetry-otel', 'desktop-product-telemetry']
-const CONTRIBUTIONS = ['plugin-package-inventory-deepseek']
-
-describe('resolveTelemetryPatches', () => {
+describe('resolveTelemetryPatch', () => {
   it('preserves the configured telemetry mode when the hard-disable switch is unset or empty', () => {
-    expect(resolveTelemetryPatches(undefined, ROWS, CONTRIBUTIONS)).toEqual([])
-    expect(resolveTelemetryPatches('', ROWS, CONTRIBUTIONS)).toEqual([])
+    expect(resolveTelemetryPatch(undefined, true)).toBeUndefined()
+    expect(resolveTelemetryPatch('', true)).toBeUndefined()
   })
 
-  it('disables every present row and clears every mounted contribution on ANY non-empty value', () => {
+  it('disables on ANY non-empty value, including falsy-looking ones', () => {
     for (const value of ['1', '0', 'false', 'no']) {
-      expect(resolveTelemetryPatches(value, ROWS, CONTRIBUTIONS)).toEqual([
-        { id: 'session-log-deepseek', disabled: true },
-        { id: 'session-telemetry-otel', disabled: true },
-        { id: 'desktop-product-telemetry', disabled: true },
-        { id: 'plugin-package-inventory-deepseek', config: { enabled: false } },
-      ])
+      expect(resolveTelemetryPatch(value, true)).toEqual({ id: 'session-telemetry-otel', disabled: true })
     }
   })
 
-  it('is trivially satisfied by a composition without telemetry rows', () => {
+  it('is trivially satisfied by a composition without the telemetry row', () => {
     // A custom profile need not mount telemetry: nothing exports, so the
     // privacy switch has nothing to disable and generates no patch.
-    expect(resolveTelemetryPatches('1', [], [])).toEqual([])
-    expect(resolveTelemetryPatches(undefined, [], [])).toEqual([])
+    expect(resolveTelemetryPatch('1', false)).toBeUndefined()
+    expect(resolveTelemetryPatch(undefined, false)).toBeUndefined()
   })
 })

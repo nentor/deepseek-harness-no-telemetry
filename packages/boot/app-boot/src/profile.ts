@@ -60,14 +60,26 @@ export function bundlePatchFiles(bundle: DshBundleManifest): string[] {
 }
 
 /**
+ * Fork-owned companion layer a bundle ships beside its declared patches. When
+ * present, it applies last without a manifest edit, so upstream manifests stay
+ * untouched and upstream merges stay clean. The file only disables rows by id;
+ * a row absent upstream stays a Loader warning, never a failure.
+ */
+const FORK_PATCH_FILENAME = 'cordis.fork.patch.yml'
+
+/**
  * Resolve a bundle declaration to its ordered absolute patch files.
  * @param packageDir - absolute directory of the bundle package.
  * @param bundle - the bundle's `dsh.bundle` declaration, as read from package.json.
- * @returns the absolute patch file paths in application order.
+ * @returns the absolute patch file paths in application order, with the
+ *   fork-owned companion layer appended when the bundle ships it.
  * @throws {Error} when `patch` is neither a string nor a list of strings.
  */
 export function bundlePatchPaths(packageDir: string, bundle: DshBundleManifest): string[] {
-  return bundlePatchFiles(bundle).map(file => join(packageDir, file))
+  const declared = bundlePatchFiles(bundle).map(file => join(packageDir, file))
+  const forkSibling = join(packageDir, FORK_PATCH_FILENAME)
+  if (declared.includes(forkSibling) || !existsSync(forkSibling)) return declared
+  return [...declared, forkSibling]
 }
 
 /** One resolved bundle layer of a profile. */

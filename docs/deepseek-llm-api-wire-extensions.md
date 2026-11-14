@@ -28,7 +28,7 @@ The [`DeepSeekLlmApiExtensionRegistry`](../packages/llm/deepseek-llm-api-extensi
 | `x-deepseek-harness-session-id` | Model requests carrying a Session id | The exact request `sessionId` string |
 | `x-deepseek-harness-compact` | Model requests whose purpose is `compaction` | The literal string `1` |
 
-Credential failure happens before anonymous-user-id resolution, so an unauthorized request neither sends these headers nor creates the identity file. A non-empty `DSH_TELEMETRY_DISABLED` omits all three `x-deepseek-harness-*` headers and the `dsh_plugin_packages` field; every `dsh` profile launcher sets that opt-out. A direct request without a Session omits `x-deepseek-harness-session-id`. Session-title and Auto review requests have no additional purpose header; the ordinary Session-id rule still applies when one carries a `sessionId`.
+Credential failure happens before anonymous-user-id resolution, so an unauthorized request neither sends these headers nor creates the identity file. A direct request without a Session omits `x-deepseek-harness-session-id`. Session-title and Auto review requests have no additional purpose header; the ordinary Session-id rule still applies when one carries a `sessionId`.
 
 ## Body-extension transaction
 

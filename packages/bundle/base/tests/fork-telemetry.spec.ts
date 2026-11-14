@@ -1,19 +1,19 @@
 /**
- * Guard for the fork-owned no-telemetry layer: every shipped bundle composes
- * its upstream patch first and `cordis.fork.patch.yml` last, and the telemetry
- * rows in that composition end up disabled. A renamed or removed upstream row
- * fails here instead of silently re-enabling capture or export.
+ * Guard for the fork-owned no-telemetry layer: every shipped bundle applies
+ * its upstream patches first and `cordis.fork.patch.yml` last via the
+ * loader's fork-sibling hook (no manifest edit), and the telemetry rows in
+ * that composition end up disabled. A renamed or removed upstream row fails
+ * here instead of silently re-enabling capture or export.
  */
 
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import * as yaml from 'js-yaml'
 import { describe, expect, it } from 'vitest'
+import { bundlePatchPaths } from '@deepseek-ai/dsh-app-boot'
 import { applyEntryPatches, entryListSchema, type PatchOptions } from '@deepseek-ai/cordis-plugin-include'
 import type { EntryOptions } from '@deepseek-ai/cordis-plugin-loader'
-
-const FORK_PATCH = './cordis.fork.patch.yml'
 
 /** Compose the listed bundle layers in profile order over an empty root. */
 function compose(...bundles: string[]): { rows: EntryOptions[]; warnings: string[] } {
@@ -24,11 +24,15 @@ function compose(...bundles: string[]): { rows: EntryOptions[]; warnings: string
     const manifest = JSON.parse(readFileSync(resolve(dir, 'package.json'), 'utf8')) as {
       dsh?: { bundle?: { patch?: string | string[] } }
     }
-    const declared = manifest.dsh?.bundle?.patch
-    const files = typeof declared === 'string' ? [declared] : declared ?? []
-    expect(files, `${bundle} must declare the fork layer`).toContain(FORK_PATCH)
+    const declared = manifest.dsh?.bundle
+    expect(declared?.patch, `${bundle} must declare dsh.bundle.patch`).toBeDefined()
+    const files = bundlePatchPaths(dir, { patch: declared!.patch! })
+    // A bundle that ships the fork layer applies it last without a manifest edit.
+    if (existsSync(resolve(dir, 'cordis.fork.patch.yml'))) {
+      expect(files.at(-1), `${bundle} must apply the fork layer last`).toMatch(/cordis\.fork\.patch\.yml$/)
+    }
     for (const file of files) {
-      const patches = yaml.load(readFileSync(resolve(dir, file), 'utf8'), { schema: entryListSchema }) as PatchOptions[]
+      const patches = yaml.load(readFileSync(file, 'utf8'), { schema: entryListSchema }) as PatchOptions[]
       rows = applyEntryPatches(rows, patches, (format, ...args) => { warnings.push(`${format} ${args.join(' ')}`) })
     }
   }
@@ -47,24 +51,6 @@ function expectContributionOff(rows: EntryOptions[], id: string): void {
   const row = rows.find(candidate => candidate.id === id)
   expect(row, `row ${id} must exist in the composed bundle`).toBeDefined()
   expect(row?.config, `row ${id} must keep its contribution off`).toMatchObject({ enabled: false })
-}
-
-/** Compose a shipped chain whose later bundles layer over the fork layer. */
-function composeChain(...bundles: string[]): EntryOptions[] {
-  let rows: EntryOptions[] = []
-  for (const bundle of bundles) {
-    const dir = fileURLToPath(new URL(`../../${bundle}`, import.meta.url))
-    const manifest = JSON.parse(readFileSync(resolve(dir, 'package.json'), 'utf8')) as {
-      dsh?: { bundle?: { patch?: string | string[] } }
-    }
-    const declared = manifest.dsh?.bundle?.patch
-    const files = typeof declared === 'string' ? [declared] : declared ?? []
-    for (const file of files) {
-      const patches = yaml.load(readFileSync(resolve(dir, file), 'utf8'), { schema: entryListSchema }) as PatchOptions[]
-      rows = applyEntryPatches(rows, patches, () => {})
-    }
-  }
-  return rows
 }
 
 /** Provider names that carry telemetry, attribution, or request diagnostics. */
@@ -122,7 +108,7 @@ describe('fork no-telemetry layer', () => {
 
   it('fails when a shipped chain mounts an outbound row the fork layer does not turn off', () => {
     for (const chain of SHIPPED_CHAINS) {
-      const rows = composeChain(...chain)
+      const { rows } = compose(...chain)
       const offenders = rows.filter(row => OUTBOUND_ROW.test(row.name)
         && !INERT_ROWS.has(row.name)
         && !telemetryOff(row))
