@@ -67,7 +67,7 @@ function compose(...bundles: string[]): EntryOptions[] {
     expect(declared?.patch, `${bundle} must declare dsh.bundle.patch`).toBeDefined()
     for (const file of bundlePatchPaths(dir, { patch: declared!.patch! })) {
       const patches = parseEntryYaml(readFileSync(file, 'utf8')) as PatchOptions[]
-      rows = applyEntryPatches(rows, patches, () => {})
+      rows = applyEntryPatches(rows, patches, () => {}).data
     }
   }
   return rows

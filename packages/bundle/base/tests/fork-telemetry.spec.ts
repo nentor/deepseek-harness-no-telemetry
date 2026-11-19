@@ -32,7 +32,7 @@ function compose(...bundles: string[]): { rows: EntryOptions[]; warnings: string
     }
     for (const file of files) {
       const patches = parseEntryYaml(readFileSync(file, 'utf8')) as PatchOptions[]
-      rows = applyEntryPatches(rows, patches, (format, ...args) => { warnings.push(`${format} ${args.join(' ')}`) })
+      rows = applyEntryPatches(rows, patches, (format, ...args) => { warnings.push(`${format} ${args.join(' ')}`) }).data
     }
   }
   return { rows, warnings }
