@@ -6,24 +6,28 @@ name: Fork versioned release
 # only, so maintenance releases built from an upstream tag leave it alone.
 #
 # Two sources feed a release. The master line releases the manifest version
-# once upstream publishes it. Maintenance releases replay the fork's patch
-# series onto the upstream release tag (branch `release/dsh-v<VERSION>`) so
-# every recent upstream tag also exists here, with telemetry removed.
+# once upstream publishes it; the daily schedule releases only that line.
+# Maintenance releases replay the fork's patch series onto the upstream
+# release tag (branch `release/dsh-v<VERSION>`) so a recent upstream tag also
+# exists here, with telemetry removed. Backfill is manual because the patch
+# series must first apply to the chosen tag: resolve conflicts on
+# `release/dsh-v<VERSION>` and push it before dispatching `backfill`.
 #
-# Dispatch manually, or let the daily schedule catch up: it releases the
-# master version when upstream has published it, otherwise the newest recent
-# upstream release this fork is still missing. A dry run builds and validates
-# everything without creating a tag, a release, or touching the tap. To
-# rebuild an existing release, delete its tag and release first, then
-# dispatch again.
+# A dry run builds and validates everything without creating a tag, a release,
+# or touching the tap. To rebuild an existing release, delete its tag and
+# release first, then dispatch again.
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Product version to release (default: master version, else the newest missing upstream release)'
+        description: 'Product version to release (default: master version)'
         required: false
         default: ''
+      backfill:
+        description: 'Backfill the newest missing upstream release from its tag'
+        type: boolean
+        default: false
       dry_run:
         description: 'Build and validate only'
         required: false
@@ -49,7 +53,8 @@ env:
   # runtime smoke steps quiet regardless of which composition they boot.
   DSH_TELEMETRY_DISABLED: '1'
   # Fork commits replayed onto an upstream release tag, oldest first. Update
-  # this list whenever the no-telemetry change grows a commit.
+  # this list whenever the no-telemetry change grows a commit; a backfill
+  # dispatch fails loudly when the series no longer applies to its tag.
   FORK_PATCH_COMMITS: '6f98deb6d7 96066b75e6 785de4f687'
   # Maintenance releases published before this date predate the fork and are
   # not backfilled.
@@ -118,11 +123,11 @@ jobs:
           fi
           released() { git ls-remote --exit-code --tags origin "dsh-v$1" >/dev/null 2>&1; }
           # With no request, release the master version first; catch up on
-          # maintenance tags only once that one is out.
+          # maintenance tags only when the dispatcher asks for a backfill.
           if [ -z "$requested" ] && ! released "$cli_version"; then
             requested="$cli_version"
           fi
-          if [ -z "$requested" ]; then
+          if [ -z "$requested" ] && [ "${{ inputs.backfill }}" = 'true' ]; then
             candidates=$(gh release list -R deepseek-ai/deepseek-harness --limit 100 \
               --json tagName,publishedAt \
               --jq ".[] | select(.publishedAt >= \"$FORK_RELEASE_SINCE\") | .tagName | sub(\"^dsh-v\"; \"\")")
@@ -773,7 +778,9 @@ jobs:
   egress-trap:
     name: Egress trap (release gate)
     needs: [prepare]
-    if: ${{ inputs.dry_run || (needs.prepare.outputs.exists != 'true' && needs.prepare.outputs.upstream_exists == 'true') }}
+    # The tripwire ships on the master line; a maintenance tree replayed from
+    # an older upstream tag predates it.
+    if: ${{ needs.prepare.outputs.tap == 'true' && (inputs.dry_run || (needs.prepare.outputs.exists != 'true' && needs.prepare.outputs.upstream_exists == 'true')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
