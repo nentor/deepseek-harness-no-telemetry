@@ -8,9 +8,11 @@
  * ignored and the run proves nothing). Proxy variables are stripped so
  * direct attempts cannot hide behind a forwarder.
  *
- * Usage: pnpm tsx scripts/egress-trap/run-egress-trap.ts [scenario]
+ * Usage: pnpm run egress-trap [scenario]
  * Scenario defaults to 'text-turn'; it must be a scenario the SDK snapshot
- * corpus replays keylessly.
+ * corpus replays keylessly. The npm script builds the host native system
+ * addon first, because the SDK profile's session lock needs it and a missing
+ * addon would otherwise surface as an unrelated replay assertion.
  */
 
 import { execFileSync } from 'node:child_process'
