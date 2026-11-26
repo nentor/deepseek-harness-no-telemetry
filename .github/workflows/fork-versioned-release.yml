@@ -646,17 +646,18 @@ jobs:
             echo '    # optionals (e.g. koffi) must install.'
             echo '    system "npm", "install", "--prefix=#{libexec}", "--cache=#{buildpath}/.npm-cache",'
             echo '                    "--no-audit", "--no-fund", "--package-lock=false"'
-            echo '    # Drop bundled foreign-arch macOS prebuilds (e.g. node-pty, pi-tui ship'
-            echo '    # per-arch directories; Homebrew rejects non-native binaries in the'
-            echo '    # prefix). The loader selects by platform and arch, so a foreign-arch'
-            echo '    # directory can never be used on this host.'
-            echo '    foreign ='
-            echo '      if OS.mac?'
-            echo '        [Hardware::CPU.arm? ? "darwin-x64" : "darwin-arm64"]'
-            echo '      else'
-            echo '        %w[darwin-x64 darwin-arm64]'
-            echo '      end'
-            echo '    foreign.each do |dir_name|'
+            echo '    # Drop every non-host prebuild directory (node-pty, pi-tui, and'
+            echo '    # others ship linux/win32 and the other macOS arch; Homebrew also'
+            echo '    # tries to ad-hoc sign their ELF/PE .node files during bottling).'
+            echo '    # The loader selects by platform and arch, so a non-host directory'
+            echo '    # can never be used here.'
+            echo '    host = if OS.mac?'
+            echo '      Hardware::CPU.arm? ? "darwin-arm64" : "darwin-x64"'
+            echo '    else'
+            echo '      Hardware::CPU.arm? ? "linux-arm64" : "linux-x64"'
+            echo '    end'
+            echo '    %w[darwin-arm64 darwin-x64 linux-arm64 linux-x64 win32-arm64 win32-x64].each do |dir_name|'
+            echo '      next if dir_name == host'
             echo '      Dir.glob(libexec/"node_modules/**/#{dir_name}").each do |path|'
             echo '        rm_r path if File.directory?(path)'
             echo '      end'
@@ -730,7 +731,9 @@ jobs:
           root_url="https://github.com/nentor/deepseek-harness-no-telemetry/releases/download/${tag}"
           cd "$(mktemp -d)"
           brew bottle --json --root-url="$root_url" nentor/tap/dsh
-          gh release upload "$tag" *.bottle.tar.gz *.bottle.json \
+          # The formula is already in the tap, so Homebrew builds rebuild 1 and
+          # names the tarball .bottle.1.tar.gz; match any rebuild suffix.
+          gh release upload "$tag" *.bottle*.tar.gz *.bottle*.json \
             --repo nentor/deepseek-harness-no-telemetry --clobber
 
   bottles-merge:
