@@ -121,10 +121,17 @@ if (import.meta.filename === resolve(process.argv[1] ?? '')) {
         if ('stdout' in error) stdout = error.stdout
         if ('stderr' in error) stderr = error.stderr
       }
+      let trapTail = '(no trap log file: the interposer never ran)'
+      try {
+        if (existsSync(log)) trapTail = readFileSync(log, 'utf8').slice(-2000)
+      } catch {
+        trapTail = '(trap log unreadable)'
+      }
       throw new Error(
         `egress trap: scenario ${JSON.stringify(scenario)} failed\n`
         + `--- stdout ---\n${excerpt(stdout)}\n`
-        + `--- stderr ---\n${excerpt(stderr)}`,
+        + `--- stderr ---\n${excerpt(stderr)}\n`
+        + `--- trap log ---\n${trapTail}`,
       )
     }
     void output
