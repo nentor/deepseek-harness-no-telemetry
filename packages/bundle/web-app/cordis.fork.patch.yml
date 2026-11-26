@@ -16,5 +16,5 @@
 # the whole config, so it restates the upstream output directory.
 - id: office-kit
   config:
-    timeoutMs: 240000
+    timeoutMs: 600000
     outputDirectory: !!js dshHomePath('office-kit', 'outputs')

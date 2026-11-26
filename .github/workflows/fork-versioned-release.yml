@@ -226,7 +226,7 @@ jobs:
             asset-path: D:/dshrepo/apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/*.exe
             asset-filter: exe
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
         with:

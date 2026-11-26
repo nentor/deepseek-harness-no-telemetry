@@ -95,7 +95,7 @@ describe('fork no-telemetry layer', () => {
     expectContributionOff(rows, 'plugin-package-inventory-deepseek')
     expectDisabled(rows, 'desktop-product-telemetry')
     expectDisabled(rows, 'product-analytics')
-    expect(rows.find(row => row.id === 'office-kit')?.config).toMatchObject({ timeoutMs: 240000 })
+    expect(rows.find(row => row.id === 'office-kit')?.config).toMatchObject({ timeoutMs: 600000 })
   })
 
   it('disables the standalone minimal SDK capture paths', () => {

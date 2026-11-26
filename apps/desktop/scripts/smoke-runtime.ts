@@ -13,9 +13,9 @@ import { createPluginProfile } from '../src/project-manager.ts'
 import type { DesktopRuntimeDescriptor } from '../src/runtime-tree.ts'
 
 const OFFICE_SKILLS = ['office']
-// The x64 Rosetta legs run each Office operation serially under a 240s plugin
+// The x64 Rosetta legs run each Office operation serially under a 600s plugin
 // budget, so the smoke client must outlast the whole sequence, not one step.
-const OFFICE_CONVERSION_TIMEOUT_MS = 240_000
+const OFFICE_CONVERSION_TIMEOUT_MS = 600_000
 const OFFICE_OPERATIONS_TIMEOUT_MS = 900_000
 
 /**
