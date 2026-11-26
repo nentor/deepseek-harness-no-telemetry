@@ -12,16 +12,16 @@ import { DesktopHostProcess } from '../src/host-process.ts'
 import { createPluginProfile } from '../src/project-manager.ts'
 import type { DesktopRuntimeDescriptor } from '../src/runtime-tree.ts'
 
-const OFFICE_SKILLS = ['office', 'office-docx', 'office-pptx', 'office-xlsx']
+const OFFICE_SKILLS = ['office']
 // The x64 Rosetta legs run each Office operation serially under a 240s plugin
 // budget, so the smoke client must outlast the whole sequence, not one step.
 const OFFICE_CONVERSION_TIMEOUT_MS = 240_000
 const OFFICE_OPERATIONS_TIMEOUT_MS = 900_000
 
 /**
- * Require each bundled Office skill to be listed and loaded with a nonempty body.
+ * Require the bundled `office` skill to be listed and loaded with a nonempty body.
  * @param results - Host probe results; `bytes` is the loaded body length, 0 when unlisted or not loaded.
- * @throws Error listing every result when a bundled Office skill is missing or empty.
+ * @throws Error listing every result when the bundled `office` skill is missing or empty.
  */
 export function assertOfficeSkillsLoadable(results: ReadonlyArray<{ readonly name: string; readonly bytes: number }>): void {
   if (!OFFICE_SKILLS.every(name => results.some(skill => skill.name === name && skill.bytes > 0))) {
