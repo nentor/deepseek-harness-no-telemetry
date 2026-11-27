@@ -561,7 +561,7 @@ jobs:
             echo '  homepage "https://github.com/nentor/deepseek-harness-no-telemetry"'
             echo '  app "DeepSeek Harness.app"'
             echo '  binary "#{appdir}/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh", target: "dsh"'
-            echo '  caveats "Unsigned build: clear quarantine before first launch: xattr -dr com.apple.quarantine /Applications/Deep Seek Harness.app"'
+            echo '  caveats "Unsigned build: clear quarantine before first launch: xattr -dr com.apple.quarantine /Applications/DeepSeek Harness.app"'
             echo 'end'
           } > cask.rb
           cat cask.rb
