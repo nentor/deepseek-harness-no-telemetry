@@ -742,8 +742,16 @@ jobs:
           root_url="https://github.com/nentor/deepseek-harness-no-telemetry/releases/download/${tag}"
           cd "$(mktemp -d)"
           brew bottle --json --root-url="$root_url" nentor/tap/dsh
-          # The formula is already in the tap, so Homebrew builds rebuild 1 and
-          # names the tarball .bottle.1.tar.gz; match any rebuild suffix.
+          # The formula URL uses the JSON's url-encoded name
+          # (`dsh-<version>...`), while `brew bottle` writes the local name
+          # (`dsh--<version>...`). Rename before uploading so a pour resolves.
+          for json in *.bottle.json; do
+            jq -r 'to_entries[] | .value.bottle.tags | to_entries[]
+              | [.value.local_filename, .value.filename] | @tsv' "$json" \
+              | while IFS=$'\t' read -r local_name url_name; do
+                  if [ "$local_name" != "$url_name" ]; then mv -f "$local_name" "$url_name"; fi
+                done
+          done
           gh release upload "$tag" *.bottle*.tar.gz *.bottle*.json \
             --repo nentor/deepseek-harness-no-telemetry --clobber
 
