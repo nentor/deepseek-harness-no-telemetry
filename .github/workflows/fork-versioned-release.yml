@@ -768,6 +768,9 @@ jobs:
           gh release download "$tag" --repo nentor/deepseek-harness-no-telemetry \
             --pattern 'dsh--*.bottle.json' --dir bottles --clobber
           brew tap nentor/tap
+          # Homebrew refuses to load a formula from a non-official tap until
+          # the tap is trusted, and `brew bottle` loads it by full name.
+          brew trust nentor/tap
           tapped="$(brew --repo nentor/tap)"
           (cd "$tapped" && brew bottle --merge --write --no-commit "$GITHUB_WORKSPACE/bottles"/*.json)
           cp "$tapped/Formula/dsh.rb" tap/Formula/dsh.rb
