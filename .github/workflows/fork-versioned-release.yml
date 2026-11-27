@@ -14,8 +14,10 @@ name: Fork versioned release
 # `release/dsh-v<VERSION>` and push it before dispatching `backfill`.
 #
 # A dry run builds and validates everything without creating a tag, a release,
-# or touching the tap. To rebuild an existing release, delete its tag and
-# release first, then dispatch again.
+# or touching the tap. To rebuild an existing release's artifacts, delete its
+# tag and release first, then dispatch again. `bottles_only` builds and merges
+# the Homebrew bottle for the already-released resolved version without
+# rebuilding or republishing its artifacts.
 
 on:
   workflow_dispatch:
@@ -26,6 +28,10 @@ on:
         default: ''
       backfill:
         description: 'Backfill the newest missing upstream release from its tag'
+        type: boolean
+        default: false
+      bottles_only:
+        description: 'Build and publish bottles for the already-released version'
         type: boolean
         default: false
       dry_run:
@@ -203,7 +209,7 @@ jobs:
   package:
     name: Package ${{ matrix.target }}
     needs: prepare
-    if: ${{ inputs.dry_run || (needs.prepare.outputs.exists != 'true' && needs.prepare.outputs.upstream_exists == 'true') }}
+    if: ${{ !inputs.bottles_only && (inputs.dry_run || (needs.prepare.outputs.exists != 'true' && needs.prepare.outputs.upstream_exists == 'true')) }}
     strategy:
       fail-fast: false
       matrix:
@@ -306,7 +312,7 @@ jobs:
   cli:
     name: Bundle CLI ${{ matrix.target }}
     needs: prepare
-    if: ${{ inputs.dry_run || (needs.prepare.outputs.exists != 'true' && needs.prepare.outputs.upstream_exists == 'true') }}
+    if: ${{ !inputs.bottles_only && (inputs.dry_run || (needs.prepare.outputs.exists != 'true' && needs.prepare.outputs.upstream_exists == 'true')) }}
     strategy:
       fail-fast: false
       matrix:
@@ -421,7 +427,7 @@ jobs:
   release:
     name: Publish the versioned release and refresh the tap
     needs: [prepare, package, cli, egress-trap]
-    if: ${{ !cancelled() && (inputs.dry_run || (needs.prepare.outputs.exists != 'true' && needs.prepare.outputs.upstream_exists == 'true')) }}
+    if: ${{ !cancelled() && !inputs.bottles_only && (inputs.dry_run || (needs.prepare.outputs.exists != 'true' && needs.prepare.outputs.upstream_exists == 'true')) }}
     env:
       FORK_TAP_TOKEN: ${{ secrets.FORK_TAP_TOKEN }}
     runs-on: ubuntu-latest
@@ -708,7 +714,7 @@ jobs:
   bottle:
     name: Bottle CLI mac-arm64
     needs: [prepare, release]
-    if: ${{ !cancelled() && !inputs.dry_run && needs.prepare.outputs.tap == 'true' && needs.release.result == 'success' }}
+    if: ${{ !cancelled() && !inputs.dry_run && needs.prepare.outputs.tap == 'true' && (inputs.bottles_only || needs.release.result == 'success') }}
     strategy:
       fail-fast: false
       matrix:
@@ -780,7 +786,7 @@ jobs:
     needs: [prepare]
     # The tripwire ships on the master line; a maintenance tree replayed from
     # an older upstream tag predates it.
-    if: ${{ needs.prepare.outputs.tap == 'true' && (inputs.dry_run || (needs.prepare.outputs.exists != 'true' && needs.prepare.outputs.upstream_exists == 'true')) }}
+    if: ${{ !inputs.bottles_only && needs.prepare.outputs.tap == 'true' && (inputs.dry_run || (needs.prepare.outputs.exists != 'true' && needs.prepare.outputs.upstream_exists == 'true')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
